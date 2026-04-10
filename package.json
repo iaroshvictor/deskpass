@@ -1,0 +1,68 @@
+{
+  "name": "deskpass",
+  "private": true,
+  "scripts": {
+    "start": "meteor run",
+    "test": "meteor test --once --driver-package meteortesting:mocha",
+    "test-app": "TEST_WATCH=1 meteor test --full-app --driver-package meteortesting:mocha",
+    "visualize": "meteor --production --extra-packages bundle-visualizer"
+  },
+  "dependencies": {
+    "@babel/runtime": "^7.23.5",
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1",
+    "@iconify/react": "^6.0.2",
+    "@mui/icons-material": "^7.3.9",
+    "@mui/material": "^7.3.9",
+    "@mui/x-date-pickers": "^8.27.2",
+    "@mui/x-tree-view": "^8.27.2",
+    "@node-rs/xxhash": "^1.7.6",
+    "@swc/helpers": "^0.5.17",
+    "@types/bcrypt": "^6.0.0",
+    "@types/node-telegram-bot-api": "^0.64.14",
+    "@types/react-color": "^3.0.13",
+    "bcrypt": "^6.0.0",
+    "canvas": "^3.2.1",
+    "chartjs-to-image": "^1.2.2",
+    "csv-writer": "^1.6.0",
+    "date-fns": "^4.1.0",
+    "dayjs": "^1.11.20",
+    "meteor-node-stubs": "^1.2.12",
+    "moment": "^2.30.1",
+    "node-onvif-ts": "^0.1.7",
+    "node-signalr": "^3.1.0",
+    "node-telegram-bot-api": "^0.63.0",
+    "qrcode.react": "^4.2.0",
+    "react": "^18.2.0",
+    "react-chartjs-2": "^5.3.1",
+    "react-color": "^2.19.3",
+    "react-dom": "^18.2.0",
+    "react-rnd": "^10.5.3",
+    "redis": "^5.11.0",
+    "rsuite": "^6.1.2",
+    "rtsp-ffmpeg": "^0.0.19"
+  },
+  "devDependencies": {
+    "@meteorjs/rspack": "^1.0.0",
+    "@rsdoctor/rspack-plugin": "^1.2.3",
+    "@rspack/cli": "^1.7.1",
+    "@rspack/core": "^1.7.1",
+    "@rspack/plugin-react-refresh": "^1.4.3",
+    "@types/meteor": "^2.9.9",
+    "@types/mocha": "^8.2.3",
+    "@types/node": "^22.10.6",
+    "@types/react": "^18.2.5",
+    "@types/react-dom": "^18.2.4",
+    "react-refresh": "^0.17.0",
+    "ts-checker-rspack-plugin": "^1.1.5",
+    "typescript": "^5.9.3"
+  },
+  "meteor": {
+    "mainModule": {
+      "client": "client/main.tsx",
+      "server": "server/main.ts"
+    },
+    "testModule": "tests/main.ts",
+    "modern": true
+  }
+}

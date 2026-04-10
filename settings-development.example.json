@@ -1,0 +1,8 @@
+{
+  "public": {
+    "isDevelopment": true,
+    "devServerHost": "192.168.100.2",
+    "devServerPort": "8889"
+  }
+}
+

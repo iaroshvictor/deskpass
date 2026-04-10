@@ -1,0 +1,9 @@
+import React from 'react';
+
+
+export function NewCamIcon() {
+    return (
+    <svg xmlns="http://www.w3.org/2000/svg" width='1.5em' height='1.5em' viewBox="0 0 24 24">
+	<path fill="#283593" d="M4 20q-.825 0-1.412-.587T2 18v-7q.65.5 1.425.75T5 12q2.075 0 3.538-1.463T10 7q0-.8-.25-1.575T9 4h7q.825 0 1.413.588T18 6v4.5l4-4v11l-4-4V18q0 .825-.587 1.413T16 20zm0-10V8H2V6h2V4h2v2h2v2H6v2zm1 6h10l-3.375-4.5L9 15l-1.625-2.175z" strokeWidth={0.5} stroke="rgba(229, 242, 255, 0.44)"></path>
+</svg>);
+}

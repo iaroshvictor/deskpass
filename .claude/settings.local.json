@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(meteor run:*)",
+      "Bash(python3 cmps_cam.py --id 1 --stream 'rtsp://admin:admin@192.168.0.55:554/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif' --zones [] --lines [])",
+      "Bash(redis-cli hkeys:*)",
+      "Bash(redis-cli hget:*)",
+      "Bash(python3 -c \":*)",
+      "Bash(timeout 30 python3 cmps_cam.py --id SBRSrPpD2bm6CCdAC1 --stream 'rtsp://admin:admin@192.168.0.55:554/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif' --zones '[{\"\"\"\"zoneId\"\"\"\":\"\"\"\"ZgxovD5muiutmckfd\"\"\"\",\"\"\"\"label\"\"\"\":\"\"\"\"A House\"\"\"\",\"\"\"\"points\"\"\"\":[[0.007947019867549669,0.753495217071376],[0.6543046357615894,0.7911699779249448],[0.6490066225165563,0.5368653421633555],[0.010596026490066225,0.4144223693892568]],\"\"\"\"borderColor\"\"\"\":\"\"\"\"#44AAFF\"\"\"\",\"\"\"\"zoneMarking\"\"\"\":true}]' --lines '[{\"\"\"\"lineId\"\"\"\":\"\"\"\"mJrT758GkNZxLYecB\"\"\"\",\"\"\"\"label\"\"\"\":\"\"\"\"Sky is the limit\"\"\"\",\"\"\"\"orientation\"\"\"\":\"\"\"\"h\"\"\"\",\"\"\"\"lineColor\"\"\"\":\"\"\"\"#FF4444\"\"\"\",\"\"\"\"left\"\"\"\":0.38145695364238413,\"\"\"\"right\"\"\"\":0.5933774834437087}]')",
+      "Bash(timeout 35 python3 cmps_cam.py --id SBRSrPpD2bm6CCdAC1 --stream 'rtsp://admin:admin@192.168.0.55:554/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif' --zones '[]' --lines '[]')",
+      "Bash(make)",
+      "Bash(find /home/devel/deskpass_cam -name *.onnx)",
+      "Bash(find /home/devel/deskpass/imports -name *.ts -type f)"
+    ]
+  }
+}
