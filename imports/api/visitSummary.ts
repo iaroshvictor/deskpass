@@ -30,7 +30,8 @@ export interface VisitSummary {
     person_box: BoundingBox
     source: string,
     faces?:number,
-    idInfo?: IdInfo
+    idInfo?: IdInfo,
+    par?: Record<string, number | string>,
 }
 export interface SummaryMeta {
     _id:string,

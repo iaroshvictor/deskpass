@@ -14,8 +14,6 @@ import { useSubscribe, useFind, useTracker } from 'meteor/react-meteor-data';
 import {AlertsArchiveCollection, AlertItem} from '/imports/api/alertsArchive'
 import { AlertLists, AlertList } from '/imports/api/alertLists';
 import {SummaryMeta, VisitSummaryMetaCollection} from '/imports/api/visitSummary'
-import WarningAmberIcon from '@mui/icons-material/WarningAmber';
-import ReportGmailerrorredIcon from '@mui/icons-material/ReportGmailerrorred';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import IconButton from '@mui/material/IconButton';
@@ -161,13 +159,11 @@ import Fab from '@mui/material/Fab';
 import {CamsCollection} from '/imports/api/cams';
 import IntruderItemModal from '../../applications/accessControl/intruderAlerts/intruderItemModal';
 import AlertItemModal from '../../applications/personAlert/alertsArchive/itemModal'
-import { CountAlertsCollection } from '/imports/api/countAlerts';
 export default function Desktop() {
     useSubscribe('unseenIntruders');
     useSubscribe('cams');
     useSubscribe('unseenAlertsArchive')
     useSubscribe('alertLists');
-    useSubscribe('unseenCountAlertsNewestPerSource');
     useSubscribe('apolloStatus');
     const apolloStatus = useTracker(() => ApolloStatusCollection.findOne('apollo-status'), []);
     const PersonFilter = useFind(() => VisitSummaryMetaCollection.find({}));
@@ -183,7 +179,6 @@ export default function Desktop() {
     const Cams = useFind(() => CamsCollection.find());
     const UnseenIntruders = useFind(() => IntruderAlertsCollection.find({ seen: false }, { sort: { timestamp: -1 }, limit: 10 }));
     const UnseenPersonAlerts = useFind(()=> AlertsArchiveCollection.find({seen:false}, { sort: { timestamp: -1 }, limit: 10 }));
-    const UnseenCountAlerts = useFind(()=> CountAlertsCollection.find({seen:false}, { sort: { timestamp: -1 }, limit: 10 }));
     useSubscribe('userRole');
     const userRoleEntry = useTracker(() => RolesCollection.findOne({ userId: Meteor.userId() ?? '' }), []);
     const userRoleDef   = useTracker(() => {
@@ -363,7 +358,7 @@ export default function Desktop() {
                      onCloseModal={onCloseModal}
                 />
             )}
-            {(UnseenPersonAlerts.length>0 || UnseenIntruders.length>0 || UnseenCountAlerts.length>0) &&(
+            {(UnseenPersonAlerts.length>0 || UnseenIntruders.length>0) &&(
 
                 <Box sx={{ position: 'absolute', top: 10, right: 10, width: showAlerts ? '280px' : 'auto', zIndex: 1000 }}>
                     <Stack direction="row" spacing={1} sx={{ mb: 1 }}>
@@ -380,7 +375,7 @@ export default function Desktop() {
                         </IconButton>
                         {showAlerts && (
                             <Button
-                                onClick={()=>{Meteor.callAsync('seenAllIntruders'); Meteor.callAsync('setAllAlertsSeen');Meteor.callAsync('setCountAllSeen')}}
+                                onClick={()=>{Meteor.callAsync('seenAllIntruders'); Meteor.callAsync('setAllAlertsSeen')}}
                                 variant='contained'
                                 color='warning'
                                 sx={{ flexGrow: 1 }}
@@ -392,34 +387,6 @@ export default function Desktop() {
                     </Stack>
                     {showAlerts && (
                         <>
-                            {UnseenCountAlerts.map((countAlert)=>(
-                                <Box sx={{backgroundColor: 'rgba(0, 0, 0, 0.7)', borderRadius: 2, p: 1, mb: 1, position:'relative' }} key={countAlert._id || ''}>
-                                    <Fab size="small" color="secondary" aria-label="add" sx={{ position: 'absolute', top: -5, right: -5 }}
-                                        onClick={()=>{
-                                            Meteor.callAsync('setCountSeen', countAlert._id ||'')
-                                        }}
-                                    >
-                                        <DisabledVisibleIcon />
-                                    </Fab>
-                                    <Stack direction='row' sx={{cursor:'pointer'}} spacing={1}>
-                                        <Avatar
-                                            alt="Alert icon"
-                                            sx={{ width: 50, height: 50, borderRadius:2, backgroundColor:`${countAlert.level ==='warning'?'#fdd835':'#e64a19'}`}}
-                                        >
-                                            {countAlert.level==='warning'?<>
-                                                <WarningAmberIcon/>
-                                            </>:<>
-                                            <ReportGmailerrorredIcon/>
-                                            </>}
-                                        </Avatar>
-                                        <Box>
-                                            <Typography color='warning' variant="body2">{Cams.find(cam=>cam._id === countAlert.source)?.name}</Typography>
-                                            <Typography color='warning' variant="body2">Crowd Alert: {`${countAlert.count} / ${countAlert.allowed}`}</Typography>
-                                            <Typography variant="caption" color="secondary">{new Date(countAlert.timestamp).toLocaleString()}</Typography>
-                                        </Box>
-                                    </Stack>
-                                </Box>
-                            ))}
                             {UnseenPersonAlerts.map((alertItem) => (
                                 <PersonAlertBox
                                     key={alertItem._id}

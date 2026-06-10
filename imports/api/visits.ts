@@ -24,9 +24,7 @@ export interface Visit {
     lines?: Record<string, string>
     zones?: Record<string, string>
     // PAR & appearance attributes from new pipeline
-    par?: number[]
-    head_color?: string
-    upper_color?: string
-    lower_color?: string
+    // dict keyed by attribute name (26 numeric scores) + optional head/upper/lower_color strings
+    par?: Record<string, number | string>
 }
 export const VisitsCollection = new Mongo.Collection<Visit>('visits');

@@ -11,6 +11,7 @@ import{
     Autocomplete,
     TextField,
     Box,
+    Chip,
     Pagination,
     LinearProgress,
     Tabs,
@@ -25,11 +26,24 @@ import{
     Snackbar,
     Button,
     ButtonGroup,
+    Tooltip,
 } from '@mui/material';
+
+const PAR_ATTRS = [
+    'hat','glasses','short_sleeve','long_sleeve','upper_stride',
+    'upper_logo','upper_plaid','upper_splice','lower_stripe',
+    'lower_pattern','long_coat','trousers','shorts','skirt_dress',
+    'boots','handbag','shoulder_bag','backpack','holds_object',
+    'age_over_60','age_18_60','age_under_18','female',
+    'facing_front','facing_side','facing_back',
+] as const;
+
+const PAR_COLOR_KEYS = ['head_color','upper_color','lower_color'] as const;
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
 import { DateTimePicker } from '@mui/x-date-pickers/DateTimePicker';
 import { VisitSummary, VisitsSummaryCollection } from '/imports/api/visitSummary';
+import { parToChips } from '/imports/applications/personAlert/alertsArchive/itemModal';
 import { useFind, useSubscribe } from 'meteor/react-meteor-data';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import DeleteSweepOutlinedIcon from '@mui/icons-material/DeleteSweepOutlined';
@@ -59,7 +73,47 @@ type Filter={
         $gte?: Date,
         $lte?: Date
     },
+    [key: string]: any,
 }
+
+const ParBadge = ({par}: {par?: Record<string, number | string>}) => {
+    if (!par || Object.keys(par).length === 0) return null;
+    const activeAttrs = parToChips(par);
+    const colors = PAR_COLOR_KEYS.map(k => par[k] as string | undefined).filter(Boolean);
+    if (activeAttrs.length === 0 && colors.length === 0) return null;
+    return (
+        <Tooltip title={
+            <Stack spacing={0.5}>
+                {colors.length > 0 && (
+                    <Stack direction='row' spacing={1}>
+                        {PAR_COLOR_KEYS.map(k => par[k] && (
+                            <Stack key={k} direction='row' spacing={0.3} alignItems='center'>
+                                <Box sx={{width:8, height:8, borderRadius:'50%', bgcolor:String(par[k]), border:'1px solid #fff', flexShrink:0}} />
+                                <Typography variant="caption">{k.replace('_color','')}: {par[k]}</Typography>
+                            </Stack>
+                        ))}
+                    </Stack>
+                )}
+                <Stack direction='row' flexWrap='wrap' gap={0.3}>
+                    {activeAttrs.map(({label, score}) => (
+                        <Chip key={label} label={`${label} ${(score*100).toFixed(0)}%`} size="small" sx={{height:16, fontSize:'0.6rem'}} />
+                    ))}
+                </Stack>
+            </Stack>
+        }>
+            <Stack direction='row' spacing={0.3} justifyContent='center' sx={{cursor:'default'}}>
+                {colors.slice(0,3).map((c, i) => (
+                    <Box key={i} sx={{width:8, height:8, borderRadius:'50%', bgcolor:c, border:'1px solid #ccc', flexShrink:0}} />
+                ))}
+                {activeAttrs.length > 0 && (
+                    <Typography variant="caption" sx={{fontSize:'0.55rem', lineHeight:1, color:'text.secondary'}}>
+                        {activeAttrs.length} attr
+                    </Typography>
+                )}
+            </Stack>
+        </Tooltip>
+    );
+};
 
 const ItemDetailedRender = ({visit, cams, setMessage, setSelectedItemDialog}:{visit:VisitSummary, onClose:()=>void, cams:Cam[], setMessage:(messgae:string)=>void, setSelectedItemDialog:(param :VisitSummary | null)=>void}) => {
     const [idForm, setIdForm] = useState<boolean>(false)
@@ -181,10 +235,11 @@ return  idForm ?(
                             )
                         }}
                     >
-                        <Stack direction="column" spacing={1} sx={{width: '100%', textAlign: 'center' }} >
+                        <Stack direction="column" spacing={0.5} sx={{width: '100%', textAlign: 'center' }} >
                                 <img src={`data:image/jpeg;base64,${visit.face_b64}`} alt="Face" style={{maxWidth:'100%'}} />
                             <Typography sx={{overflow:'hidden', display:'-webkit-box', lineClamp:2, WebkitLineClamp:2,wordBreak:'break-all'}} variant="caption">{getCamName(visit.source)}</Typography>
                             <Typography sx={{mt:0}} variant="body2">{visit.timestamp.toLocaleString()}</Typography>
+                            <ParBadge par={visit.par} />
                         </Stack>
                     </Paper>
                 ))}
@@ -202,6 +257,18 @@ const PersonsDatabaseRenderer= () =>{
     const [selectedTab, setSelectedTab] = useState<'all' | 'selected'>('all');
     const [message, setMessage] = useState<string | null>(null);
     const [filter, setFilter] =useState<Filter>({timestamp:{$gte:new Date()}})
+    const [parFilter, setParFilter] = useState<string[]>([]);
+
+    const applyParFilter = (attrs: string[]) => {
+        setParFilter(attrs);
+        setFilter(prev => {
+            const next: Filter = {};
+            if (prev.source) next.source = prev.source;
+            if (prev.timestamp) next.timestamp = prev.timestamp;
+            attrs.forEach(attr => { next[`par.${attr}`] = { $gte: 0.6 }; });
+            return next;
+        });
+    };
     const [lastSelected, setLastSelected] = useState<number | null>(null);
     const [selectedItems , setSelectedItems] = useState<VisitSummary[]>([]);
     const limit=100;
@@ -336,6 +403,21 @@ const PersonsDatabaseRenderer= () =>{
                         }
                     }} />
                 </LocalizationProvider>
+                <Autocomplete
+                    multiple
+                    disablePortal
+                    options={[...PAR_ATTRS]}
+                    value={parFilter}
+                    getOptionLabel={(o) => o.replace(/_/g,' ')}
+                    onChange={(_e, newValue) => applyParFilter(newValue)}
+                    sx={{ minWidth: 220 }}
+                    renderInput={(params) => <TextField {...params} label="PAR Attributes" />}
+                    renderTags={(value, getTagProps) =>
+                        value.map((option, index) => (
+                            <Chip {...getTagProps({index})} key={option} label={option.replace(/_/g,' ')} size="small" />
+                        ))
+                    }
+                />
             </Stack>
             <Stack direction='row' spacing={2} sx={{mb:2}}>
                 {selectedItems.length > 0 && (

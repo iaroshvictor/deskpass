@@ -6,6 +6,7 @@ export interface AlertItem extends Visit {
     seenBy:string,
     seenAt:Date | null,
     listId:string,
+    attached?: boolean,
 }
 
 export const AlertsArchiveCollection = new Mongo.Collection<AlertItem>('alertsArchive');

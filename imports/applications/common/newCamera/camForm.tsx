@@ -96,12 +96,9 @@ const CamForm = (props: camFormProps) => {
     const [editRtspLink, setEditRtspLink] = useState<string>(Cam?.streamurl || '');
     const [editCamName, setEditCamName] = useState<string>(Cam?.name || '');
     const [localImageData, setLocalImageData] = useState<string | null>(imageData || Cam?.snapshot || null);
-    const [crowdAlert, setCrowdAlert] = useState<number>(Cam?.maxPerson || 0);
-    const [crowdAlertDanger, setCrowdAlertDanger] = useState<number>(Cam?.maxPersonDanger || 0);
     const [faceAlert, setFaceAlert] = useState<boolean>(Cam?.faceAlert ?? true);
     const [disableSpoofFilter, setDisableSpoofFilter] = useState<boolean>(Cam?.disableSpoofFilter || false);
     const [accessControl, setAccessControl] = useState<boolean>(Cam?.accessControl ?? true);
-    const [personCount, setPersonCount] = useState<boolean>(Cam?.countPerson ?? true);
     const [selectedZoneId, setSelectedZoneId] = useState<string | null>(Cam?.zone || null);
     const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
     const [lines, setLines] = useState<CamLine[]>(Cam?.lines || []);
@@ -219,31 +216,6 @@ const CamForm = (props: camFormProps) => {
                     <FormControlLabel control={<Switch checked={disableSpoofFilter} onChange={(_e, v) => { setDisableSpoofFilter(v); }} />} label="Disable Spoof Filter" />
                     <FormControlLabel control={<Switch checked={faceAlert} onChange={(_e, v) => { setFaceAlert(v); }} />} label="Person Alert" />
                     <FormControlLabel control={<Switch checked={accessControl} onChange={(_e, v) => { setAccessControl(v); }} />} label="Access Control" />
-                    <FormControlLabel control={<Switch checked={personCount} onChange={(_e, v) => { setPersonCount(v); }} />} label="Person Count" />
-                    {personCount && (
-                        <>
-                            <TextField
-                                sx={{ width: '100%' }}
-                                label="Crowd Alert Threshold"
-                                variant="outlined"
-                                size="small"
-                                type="number"
-                                helperText="A warning alert will be triggered if the number of people exceeds this threshold."
-                                onChange={(e) => { setCrowdAlert(Number(e.target.value)); }}
-                                value={crowdAlert}
-                            />
-                            <TextField
-                                sx={{ width: '100%' }}
-                                label="Crowd Danger Threshold"
-                                variant="outlined"
-                                size="small"
-                                type="number"
-                                helperText="A danger alert will be triggered if the number of people exceeds this threshold."
-                                onChange={(e) => { setCrowdAlertDanger(Number(e.target.value)); }}
-                                value={crowdAlertDanger}
-                            />
-                        </>
-                    )}
                     <Divider />
                     <Button
                         variant="contained"
@@ -261,12 +233,9 @@ const CamForm = (props: camFormProps) => {
                                 const mycam: Cam = {
                                     name: camName || editCamName,
                                     streamurl: rtspLink || editRtspLink,
-                                    maxPerson: crowdAlert,
-                                    maxPersonDanger: crowdAlertDanger,
                                     faceAlert: faceAlert,
                                     accessControl: accessControl,
                                     zone: selectedZoneId,
-                                    countPerson: personCount,
                                     disableSpoofFilter: disableSpoofFilter,
                                     snapshot: imageData || localImageData || '',
                                     lines: lines,
@@ -280,10 +249,8 @@ const CamForm = (props: camFormProps) => {
                                     setErrorMessage('Cam Added Successfully');
                                     if (resetAddForm) resetAddForm();
                                     if (setRtspLink) setRtspLink('');
-                                    setCrowdAlert(0);
                                     setFaceAlert(true);
                                     setAccessControl(true);
-                                    setPersonCount(true);
                                     setSelectedZoneId(null);
                                     setDisableSpoofFilter(false);
                                     setLines([]);

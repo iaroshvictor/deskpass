@@ -24,12 +24,9 @@ export interface Cam {
   _id?: string;
   name: string;
   streamurl: string;
-  maxPerson: number;
-  maxPersonDanger: number;
   faceAlert: boolean;
   accessControl: boolean;
   zone: string;
-  countPerson: boolean;
   disableSpoofFilter: boolean;
   snapshot: string;
   lines: CamLine[];

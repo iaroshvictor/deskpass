@@ -22,8 +22,7 @@ import { AlertLists } from '/imports/api/alertLists';
 import {spawn, exec} from 'child_process';
 import {AlertsArchiveCollection, } from '/imports/api/alertsArchive';
 import { AccessReportCollection, AccessReport } from '/imports/api/accessReport';
-import {IntruderAlertsCollection, IntruderVisit} from '/imports/api/intruderAlerts';
-import { CountAlertsCollection } from '/imports/api/countAlerts';
+import {IntruderAlertsCollection} from '/imports/api/intruderAlerts';
 import { TemporaryCardsCollection } from '/imports/api/temporaryCards';
 import { cleanupExpiredTemporaryCards } from '/imports/applications/accessControl/temporaryCards/serverMethods';
 import { sendAlert } from '/imports/bot/alerts'
@@ -45,11 +44,6 @@ let apolloStatus: { status: ApolloStatusType; message?: string; lastUpdated: Dat
   message: 'Apollo API not configured',
   lastUpdated: new Date()
 };
-const embeddingStd = (v: number[]): number => {
-    const mean = v.reduce((a, b) => a + b, 0) / v.length;
-    return Math.sqrt(v.reduce((a, b) => a + (b - mean) ** 2, 0) / v.length);
-};
-
 const apolloStatusSubscribers = new Set<any>();
 
 function updateApolloStatus(status: ApolloStatusType, message?: string) {
@@ -79,58 +73,6 @@ const LiveGateReports :{[x:string]:{handler:number}}={}
 const LiveGateCards :{[x:string]:{[x:string]:{handler:NodeJS.Timeout, card:string}}}={}
 const ControllerIfLock:{[x:string]:number} = {}
 const KnownPersons:{[x:string]:any} ={}
-
-// ── Per-camera frame-consumer state ──────────────────────────────────────────
-interface FaceState {
-  obsCount:         number;
-  consecutiveId:    string | null;
-  consecutiveHits:  number;
-  lastPublishedTime: number;
-}
-// CamFaceState[camId][personTid] — cleared when camera stops
-const CamFaceState: Record<string, Record<number, FaceState>> = {};
-// Set of camera IDs currently streaming (drives the BLPOP consumer)
-const StreamingCams = new Set<string>();
-
-// ── ArcFace embedding utilities ───────────────────────────────────────────────
-// Embeddings come from Python as raw float32 bytes encoded in base64 (512 × 4 = 2048 bytes).
-const decodeEmbedding = (b64: string): Float32Array | null => {
-  try {
-    const buf = Buffer.from(b64, 'base64');
-    if (buf.length !== 512 * 4) return null;
-    // Slice to get a properly-aligned ArrayBuffer
-    const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
-    return new Float32Array(ab);
-  } catch { return null; }
-};
-const normalizeEmb = (emb: Float32Array): Float32Array => {
-  let sq = 0;
-  for (let i = 0; i < emb.length; i++) sq += emb[i] * emb[i];
-  const n = Math.sqrt(sq) || 1;
-  const out = new Float32Array(emb.length);
-  for (let i = 0; i < emb.length; i++) out[i] = emb[i] / n;
-  return out;
-};
-// Cosine similarity — assumes a is normalized; b (stored face_model) must also be normalized.
-const cosineSim = (a: Float32Array, b: number[]): number => {
-  let dot = 0;
-  for (let i = 0; i < 512; i++) dot += a[i] * b[i];
-  return dot;
-};
-// Match a normalized embedding against all models in KnownPersons.
-const matchFace = (emb: Float32Array): { personId: string; similarity: number; modelId: string } | null => {
-  const THRESHOLD = 0.45;
-  let best: { personId: string; similarity: number; modelId: string } | null = null;
-  for (const [pid, person] of Object.entries(KnownPersons)) {
-    for (const model of (person.models ?? []) as { _id: string; face_model: number[] }[]) {
-      if (!model.face_model || model.face_model.length !== 512) continue;
-      const sim = cosineSim(emb, model.face_model);
-      if (sim >= THRESHOLD && (!best || sim > best.similarity))
-        best = { personId: pid, similarity: sim, modelId: model._id };
-    }
-  }
-  return best;
-};
 
 import redisClient from './redisclient';
 Meteor.startup(async () => {
@@ -445,7 +387,12 @@ Meteor.startup(async () => {
       _id: id,
       ...idInfo,
       models: visits
-        .filter(v => v.face_model?.length === 512 && embeddingStd(v.face_model) > 0.010)
+        .filter(v => {
+          if (v.face_model?.length !== 512) return false;
+          const mean = v.face_model.reduce((a: number, b: number) => a + b, 0) / 512;
+          const std = Math.sqrt(v.face_model.reduce((a: number, b: number) => a + (b - mean) ** 2, 0) / 512);
+          return std > 0.010;
+        })
         .map(v => ({_id: v._id, face_model: v.face_model})),
     };
   };
@@ -471,61 +418,7 @@ Meteor.startup(async () => {
     await pub.set('persons_cache_ready', '0');
   }
 
-  // ── Frame types (matching Python cmps_cam.py JSON output) ─────────────────
-  interface CamFramePerson {
-    tid: number;
-    bbox: [number, number, number, number];
-    emb: string | null;
-    has_emb: boolean;
-    lines: Record<string, string>;
-    zones: Record<string, string>;
-    par: number[] | null;
-    crop: string | null;
-    head_color?: string;
-    upper_color?: string;
-    lower_color?: string;
-  }
-  interface CamFrameFace {
-    obj_id: number;
-    bbox: [number, number, number, number];
-    person_tid: number | null;
-    frontal: boolean;
-    emb: string | null;
-    face_crop: string | null;
-  }
-  interface CamFrame {
-    frame: number;
-    fps: number;
-    source: string;
-    persons: CamFramePerson[];
-    faces: CamFrameFace[];
-  }
-
-  const bboxToBox = ([left, top, right, bottom]: [number, number, number, number]) =>
-    ({ left, top, width: right - left, height: bottom - top });
-
-  // ── Person-count occupancy alerts (replaces countListener) ────────────────
-  const handlePersonCount = (source: string, count: number) => {
-    if (!myCams[source]?.countPerson) return;
-    if (count > myCams[source].maxPersonDanger) {
-      if (myCams[source].state !== 'danger') {
-        CountAlertsCollection.insertAsync({ timestamp: new Date(), count, level: 'danger',
-          allowed: myCams[source].maxPersonDanger, seen: false, seenBy: '', seenAt: null, source });
-        myCams[source].state = 'danger';
-      }
-    } else if (count > myCams[source].maxPerson) {
-      if (myCams[source].state !== 'warning') {
-        CountAlertsCollection.insertAsync({ timestamp: new Date(), count, level: 'warning',
-          allowed: myCams[source].maxPerson, seen: false, seenBy: '', seenAt: null, source });
-        myCams[source].state = 'warning';
-      }
-    } else {
-      myCams[source].state = 'success';
-    }
-    myCams[source].count = count;
-  };
-
-  // ── Alert / access-control reactions (extracted from the old listener) ─────
+// ── Alert / access-control reactions (extracted from the old listener) ─────
   const handleDetectionAlerts = async (visit: Visit & { similarity?: number }, idP: string | number | undefined) => {
     const cam = await CamsCollection.findOneAsync({ _id: visit.source });
     const myGates = cam?.accessControl
@@ -620,107 +513,6 @@ Meteor.startup(async () => {
       });
     }
   };
-
-  // ── Frame processing: face recognition + visit creation ───────────────────
-  const MIN_OBS    = 5;    // minimum frontal-face observations before matching
-  const CONSEC_GATE = 4;   // consecutive matching frames required before confirming
-  const REPUBLISH_MS = 10_000; // minimum ms between visits for the same tracker ID
-
-  const createVisit = async (frame: CamFrame, person: CamFramePerson, face: CamFrameFace,
-                             match: { personId: string; similarity: number; modelId: string } | null) => {
-    const tracking_id = `${frame.source}-${person.tid}`;
-    const rawEmb = decodeEmbedding(face.emb!);
-    const faceModel = rawEmb ? Array.from(normalizeEmb(rawEmb)) : [];
-    const visit: Visit = {
-      face_b64:    await resizeBase64Image(face.face_crop ?? '', 150),
-      person_b64:  await resizeBase64Image(person.crop ?? '', 150),
-      face_model:  faceModel,
-      tracking_id,
-      timestamp:   new Date(),
-      face_box:    bboxToBox(face.bbox),
-      person_box:  bboxToBox(person.bbox),
-      source:      frame.source,
-      reference:   false,
-      lines:       person.lines,
-      zones:       person.zones,
-      par:         person.par ?? undefined,
-      head_color:  person.head_color,
-      upper_color: person.upper_color,
-      lower_color: person.lower_color,
-      ...(match ? { idInfo: match.personId, model_id: match.modelId, similarity: match.similarity } : {}),
-    };
-    await VisitsCollection.insertAsync(visit);
-    // VisitSummary only stores display fields — exclude Visit-only keys whose
-    // types are incompatible (idInfo on VisitSummary is IdInfo, not string).
-    const summaryFields: Partial<VisitSummary> = {
-      face_b64:   visit.face_b64,
-      person_b64: visit.person_b64,
-      face_model: visit.face_model,
-      timestamp:  visit.timestamp,
-      face_box:   visit.face_box,
-      person_box: visit.person_box,
-      source:     visit.source,
-    };
-    await VisitsSummaryCollection.updateAsync(
-      { _id: tracking_id }, { $set: summaryFields }, { upsert: true }
-    ).catch(() => {});
-    await handleDetectionAlerts(visit, match?.personId);
-  };
-
-  const processFrame = async (frame: CamFrame) => {
-    handlePersonCount(frame.source, frame.persons.length);
-    if (!CamFaceState[frame.source]) CamFaceState[frame.source] = {};
-    const state = CamFaceState[frame.source];
-    const now = Date.now();
-
-    for (const face of frame.faces) {
-      if (!face.frontal || !face.emb || face.person_tid === null) continue;
-      const person = frame.persons.find(p => p.tid === face.person_tid);
-      if (!person) continue;
-      const tid = face.person_tid;
-      const fs: FaceState = state[tid] ?? (state[tid] = {
-        obsCount: 0, consecutiveId: null, consecutiveHits: 0, lastPublishedTime: 0,
-      });
-      fs.obsCount++;
-      if (fs.obsCount < MIN_OBS) continue;
-      const rawEmb = decodeEmbedding(face.emb);
-      if (!rawEmb) continue;
-      const emb = normalizeEmb(rawEmb);
-      const match = matchFace(emb);
-      if (match?.personId === fs.consecutiveId) {
-        fs.consecutiveHits++;
-      } else {
-        fs.consecutiveId = match?.personId ?? null;
-        fs.consecutiveHits = match ? 1 : 0;
-      }
-      if (fs.consecutiveHits < CONSEC_GATE) continue;
-      if (now - fs.lastPublishedTime < REPUBLISH_MS) continue;
-      fs.lastPublishedTime = now;
-      await createVisit(frame, person, face, match);
-    }
-
-    // Prune state for persons no longer in frame
-    const activeTids = new Set(frame.persons.map(p => p.tid));
-    for (const k of Object.keys(state)) {
-      if (!activeTids.has(Number(k))) delete state[Number(k)];
-    }
-  };
-
-  // ── Frame consumer: BLPOP across all active camera lists ──────────────────
-  const frameReader = redisClient.duplicate();
-  await frameReader.connect();
-
-  (async () => {
-    while (true) {
-      const keys = Array.from(StreamingCams).map(id => `cam:frames:${id}`);
-      if (keys.length === 0) { await new Promise(r => setTimeout(r, 500)); continue; }
-      const result = await frameReader.blPop(keys, 1).catch(() => null);
-      if (result) {
-        const frame: CamFrame = JSON.parse(result.element);
-        processFrame(frame).catch(e => console.error('[frameConsumer]', e));
-      }
-    }
-  })();
 
   const startStreamHandler = (id:string, streamurl:string, disableSpoofFilter:boolean = false, lines:any[] = [], zones:any[] = []) => {
     // Skip stream handler in development mode
@@ -896,13 +688,12 @@ Meteor.startup(async () => {
   VisitsCollection.rawCollection().createIndex({ tracking_id:1 });
   RecordingsCollection.rawCollection().createIndex({ camId: 1, startedAt: -1 });
   RecordingsCollection.rawCollection().createIndex({ startedAt: -1 });
-  CountAlertsCollection.rawCollection().createIndex({ timestamp: -1 });
-  CountAlertsCollection.rawCollection().createIndex({ seen: -1 });
-  CountAlertsCollection.rawCollection().createIndex({ source: -1 });
-  VisitsSummaryCollection.rawCollection().createIndex({ 'source': 1, 'timestamp': -1 });
+VisitsSummaryCollection.rawCollection().createIndex({ 'source': 1, 'timestamp': -1 });
   VisitsSummaryCollection.rawCollection().createIndex({ timestap: 1 });
   VisitsSummaryCollection.rawCollection().createIndex({ idInfo: 1 }, {sparse: true});
   VisitsSummaryCollection.rawCollection().createIndex({ 'idInfo.divission': 1 });
+  VisitsSummaryCollection.rawCollection().createIndex({ 'par.$**': 1 });
+  VisitsCollection.rawCollection().createIndex({ 'par.$**': 1 });
   IntruderAlertsCollection.rawCollection().createIndex({ tracking_id: 1 });
   IntruderAlertsCollection.rawCollection().createIndex({ seen: 1 });
   IntruderAlertsCollection.rawCollection().createIndex({ timestamp: 1 });
@@ -926,192 +717,36 @@ Meteor.startup(async () => {
   // Run cleanup once at startup
   cleanupExpiredTemporaryCards();
 
-  interface VisitExtra extends Visit {
-    similarity?: number;
-  }
-  const listener = async(message:string, channel:string) => {
-    if(channel === 'new_detection'){
-      const visit = JSON.parse(message) as VisitExtra;
-      const res_face = await resizeBase64Image(visit.face_b64, 150)
-      const res_person = await resizeBase64Image(visit.person_b64, 150)
-      visit.face_b64 = res_face;
-      visit.person_b64 = res_person;
-      visit.timestamp = new Date(visit.timestamp);
-      visit.reference=false;
-      VisitsCollection.insertAsync(visit as Visit);
-      // Convert idInfo to number if it's a numeric string (person IDs are timestamp-based numbers)
-      const IdP = visit.idInfo ? (isNaN(Number(visit.idInfo)) ? visit.idInfo : Number(visit.idInfo)) : undefined;
-      delete visit.idInfo
-      if(visit.tracking_id) {
-         const VisitSummaryItem:VisitSummary = {
-          _id: visit.tracking_id,
-          face_b64: visit.face_b64,
-          person_b64: visit.person_b64,
-          face_model: visit.face_model,
-          timestamp: visit.timestamp,
-          face_box: visit.face_box,
-          person_box: visit.person_box,
-          source: visit.source,
-        };
-        try{
-          // Exclude _id from the $set document
-          const { _id, ...updateFields } = VisitSummaryItem;
-          VisitsSummaryCollection.updateAsync(
-            { _id: VisitSummaryItem._id },
-            { $set: updateFields },
-            { upsert: true }
-          );
-        }catch(e) {
-          //i need at least one item in the collection
-          console.error('Error updating or inserting visit summary:', e);
-        }
+  const listener = async (message: string, channel: string) => {
+    if (channel === 'new_detection') {
+      const payload = JSON.parse(message) as Visit & { similarity?: number };
+      payload.face_b64   = await resizeBase64Image(payload.face_b64, 150);
+      payload.person_b64 = await resizeBase64Image(payload.person_b64, 150);
+      payload.timestamp  = new Date(payload.timestamp as unknown as string);
+      payload.reference  = false;
+      const idP = payload.idInfo
+        ? (isNaN(Number(payload.idInfo as unknown as string))
+            ? payload.idInfo as unknown as string
+            : Number(payload.idInfo as unknown as string))
+        : undefined;
+      await VisitsCollection.insertAsync(payload);
+      if (payload.tracking_id) {
+        await VisitsSummaryCollection.updateAsync(
+          { _id: payload.tracking_id },
+          { $set: {
+              face_b64:   payload.face_b64,
+              person_b64: payload.person_b64,
+              face_model: payload.face_model,
+              timestamp:  payload.timestamp,
+              face_box:   payload.face_box,
+              person_box: payload.person_box,
+              source:     payload.source,
+              ...(payload.par && Object.keys(payload.par).length > 0 ? { par: payload.par } : {}),
+          }},
+          { upsert: true }
+        ).catch(() => {});
       }
-      const cam = await CamsCollection.findOneAsync({ _id: visit.source });
-      const myGates = cam?.accessControl ? Object.values(GatesMap)
-              .filter(g=>
-                g.interfaces.filter(itf=>itf.cam === visit.source).length>0
-              ):[] 
-      if(IdP){
-        if (visit.person_b64 !== ''){
-          const person = KnownPersons[IdP] as VisitSummary;
-          //detected a known person, check with the source what are our further actions
-          if(person){
-            if(cam){
-              if(cam.faceAlert){
-                if (person.idInfo?.alertList){
-                  if(LiveCamAlerts[visit.source] === undefined){
-                    LiveCamAlerts[visit.source] ={}
-                  }
-                  if(LiveCamAlerts[visit.source][person._id||"person"] === undefined){
-                    LiveCamAlerts[visit.source][person._id||"person"] ={
-                      handler:setTimeout(()=>{
-                        delete LiveCamAlerts[visit.source][person._id||"person"]
-                      }, 5000)
-                    }
-                    // Query with both number and string versions of idInfo for legacy compatibility
-                    const existingAlert = await AlertsArchiveCollection.find({seenBy:{$ne:'root'},source:visit.source, idInfo:{$in:[person._id, String(person._id)]}, timestamp: {$gt: new Date(new Date().getTime() - person.idInfo.alertpause * 1000 * 60)}}).countAsync();
-                    if(existingAlert){
-                      const alertItem = {
-                        ...visit,
-                        idInfo:IdP as any,
-                        seen: true,
-                        seenBy: 'root',
-                        listId: person.idInfo.alertList,
-                        seenAt:null
-                      };
-                      await AlertsArchiveCollection.insertAsync(alertItem);
-                    } else {
-                      const alertItem = {
-                        ...visit,
-                        idInfo:IdP as any,
-                        seen: false,
-                        seenBy: '',
-                        listId: person.idInfo.alertList,
-                        seenAt:null
-                      };
-                      await AlertsArchiveCollection.insertAsync(alertItem);
-                      if(tgBot){
-                        sendAlert(alertItem as any, tgBot)
-                      }
-                    }
-                  }
-                }
-              }
-              if(cam.accessControl){
-                myGates.forEach(async gate=>{
-                  const myif  = gate.interfaces.find(itf=>itf.cam === visit.source);
-                  gate._id = gate._id || "ensure"
-                  if (LiveGatePersons[gate._id] === undefined){
-                    LiveGatePersons[gate._id] = {}
-                  }
-                  if(LiveGatePersons[gate._id][person._id] !== undefined){
-                    clearTimeout(LiveGatePersons[gate._id][person._id].handler)
-                  }
-                  LiveGatePersons[gate._id][person._id] = {handler:setTimeout(()=>{delete LiveGatePersons[gate._id||'ensure'][person._id]}, 10000)}
-                  if(myif && myif.lockSettings && myif.cmpsaction.includes('unlock')){
-                    //validate if person is allowed to access
-                    if(person.idInfo  && person.idInfo.allowedGates.includes(gate._id||'')){
-                      if(!myif.lockSettings.tfa){
-                        if(myif.lockSettings && myif.lockSettings?.controller){
-                          if(ControllerIfLock[myif.lockSettings.controller] === undefined){
-                            ControllerIfLock[`${myif.lockSettings.controller}_${myif.lockSettings.reader_node}_${myif.lockSettings.reader_lda}`] = Meteor.setTimeout(()=>{delete ControllerIfLock[`${myif.lockSettings?.controller}_${myif.lockSettings?.reader_node}_${myif.lockSettings?.reader_lda}`]}, 5000)
-                            // TFA disabled: send only the first card
-                            const firstCard = person.idInfo.accessCard[0];
-                            if(firstCard){
-                              pub.publish('apollo_stream', JSON.stringify({
-                                id: myif.lockSettings.controller,
-                                node:myif.lockSettings.reader_node,
-                                lda:myif.lockSettings.reader_lda,
-                                card: firstCard,
-                                decission:'grant',
-                              }))
-                            }
-                          }
-                        }
-                        //publish to redis  channel access_grant {id:myif.lockSettings.controller, }
-
-                      }else{
-                        if(LiveGateCards[gate._id]?.[person._id]){
-                          //publish to redis  channel access_grant {id:myif.lockSettings.controller, }
-                          if(myif.lockSettings?.controller){
-                            if(ControllerIfLock[myif.lockSettings.controller] === undefined){
-                              ControllerIfLock[`${myif.lockSettings.controller}_${myif.lockSettings.reader_node}_${myif.lockSettings.reader_lda}`] = Meteor.setTimeout(()=>{delete ControllerIfLock[`${myif.lockSettings?.controller}_${myif.lockSettings?.reader_node}_${myif.lockSettings?.reader_lda}`]}, 5000)
-                              // TFA enabled: send the specific card that was scanned
-                              const scannedCard = LiveGateCards[gate._id][person._id].card;
-                              if(scannedCard){
-                                pub.publish('apollo_stream', JSON.stringify({
-                                  id: myif.lockSettings.controller,
-                                  node:myif.lockSettings.reader_node,
-                                  lda:myif.lockSettings.reader_lda,
-                                  card: scannedCard,
-                                  decission:'grant',
-                                }))
-                              }
-                            }
-                          }
-                        }
-                        // check if person has activeSession of cam than send to redis
-                      }
-                    }
-                    
-                  }
-                  if(myif && myif.cmpsaction.includes('report')){
-                    const acD = {...visit, type:myif.action, idInfo: person._id, source:gate._id} as AccessReport;
-                    //check if not insertedAlready
-                    if(LiveGateReports[visit.tracking_id] === undefined){
-                      LiveGateReports[visit.tracking_id] = {handler: Meteor.setTimeout(()=>{delete LiveGateReports[visit.tracking_id]}, 10000)};
-                      AccessReportCollection.insertAsync(acD);
-                    }
-                  }
-                })
-              }
-            } 
-          }
-        }
-      }else{
-        myGates.forEach(async gate=>{
-          const myif  = gate.interfaces.find(itf=>itf.cam === visit.source);
-          if(myif && myif.cmpsaction.includes('report') && myif.reportingSettings?.intruderAlert){
-            const triggerLine = myif.reportingSettings.intruderLine;
-            const triggerSide = myif.reportingSettings.intruderSide;
-            const triggered = !!(triggerLine && triggerSide && visit.lines?.[triggerLine] === triggerSide);
-            if(triggered){
-              if(LiveGateIntrudders[visit.tracking_id] === undefined){
-                LiveGateIntrudders[visit.tracking_id] = {handler: Meteor.setTimeout(()=>{delete LiveGateIntrudders[visit.tracking_id]}, 10000)};
-                const intruderVisit:IntruderVisit = {
-                  ...visit,
-                  triggerLine,
-                  triggerSide,
-                  seen: false,
-                  seenBy: null,
-                  seenAt: null,
-                };
-                await IntruderAlertsCollection.insertAsync(intruderVisit);
-              }
-            }
-          }
-        })
-      }
+      await handleDetectionAlerts(payload, idP);
     }
     if(channel === 'card_read'){
       const msg :cardReadMessage = JSON.parse(message);
@@ -1190,55 +825,7 @@ Meteor.startup(async () => {
   }
   }
 
-  type countMessage={
-    source:string,
-    count:number
-  }
-  const countListener = async(message:string, channel:string)=>{
-    if(channel === 'person_count'){
-      const {source, count}:countMessage = JSON.parse(message)
-      if(myCams[source] && myCams[source].countPerson){
-        if(count > myCams[source].maxPersonDanger){
-          //insert CountAlert
-          if(myCams[source].state !== 'danger'){
-            await CountAlertsCollection.insertAsync({
-                timestamp:new Date(),
-                count,
-                level:"danger",
-                allowed:myCams[source].maxPersonDanger,
-                seen:false,
-                seenBy:'',
-                seenAt:null,
-                source:source
-            })
-            myCams[source].state='danger'
-          }
-
-        }else if(count > myCams[source].maxPerson){
-          if(myCams[source].state!=='warning'){
-
-            await CountAlertsCollection.insertAsync({
-                timestamp:new Date(),
-                count,
-                level:"warning",
-                allowed:myCams[source].maxPersonDanger,
-                seen:false,
-                seenBy:'',
-                seenAt:null,
-                source:source
-            })
-            myCams[source].state='warning'
-          }
-        }else{
-          myCams[source].state = 'success'
-        }
-        myCams[source].count = count
-      }
-    }
-  }
-
   await redisClient.subscribe('new_detection', listener);
-  await redisClient.subscribe('person_count', countListener);
   await redisClient.subscribe('card_read', listener);
   await redisClient.subscribe('get_cams', cams_listener);
 
@@ -1296,9 +883,6 @@ Meteor.startup(async () => {
   Meteor.publish("alertsArchive", function (filter, limit = 100, skip = 0, sort = {timestamp:-1}) {
     return AlertsArchiveCollection.find(filter, { limit, skip, sort });
   });
-  Meteor.publish('unseeCountAlerts', function(){
-    return CountAlertsCollection.find({seen:false}, {sort: {timestamp: -1}, limit: 20});
-  })
   Meteor.publish('unseenIntruders', function(){
     return IntruderAlertsCollection.find({ seen: false }, {sort: {timestamp: -1}, limit: 20});
   })
@@ -1431,68 +1015,6 @@ Meteor.startup(async () => {
     return TemporaryCardsCollection.find(filter, { limit, skip, sort });
   });
 
-  Meteor.publish('unseenCountAlertsNewestPerSource', function () {
-  const self = this;
-
-  // Track the newest doc ID per source
-  const newestPerSource:{[x:string]:{id:string, timestamp:Date}} = {};
-
-  const handler = CountAlertsCollection.find(
-    { seen: false },
-    { sort: { timestamp: -1 } } // newest first
-  ).observeChanges({
-    added(id, fields) {
-      const source = fields.source;
-
-      if (!source) return;
-
-      // If this source has no entry yet or this alert is newer, replace it
-      if (
-        !newestPerSource[source] ||
-        fields.timestamp || new Date() > newestPerSource[source].timestamp
-      ) {
-        // Remove the old one if it exists
-        if (newestPerSource[source]) {
-          self.removed('countAlerts', newestPerSource[source].id);
-        }
-
-        newestPerSource[source] = { id, timestamp: fields.timestamp || new Date() };
-        self.added('countAlerts', id, fields);
-      }
-    },
-
-    changed(id, fields) {
-      // If seen becomes true, remove it from published set
-      if (fields.seen === true) {
-        for (const source in newestPerSource) {
-          if (newestPerSource[source].id === id) {
-            self.removed('countAlerts', id);
-            delete newestPerSource[source];
-            break;
-          }
-        }
-      }
-    },
-
-    removed(id) {
-      for (const source in newestPerSource) {
-        if (newestPerSource[source].id === id) {
-          self.removed('countAlerts', id);
-          delete newestPerSource[source];
-          break;
-        }
-      }
-    }
-  });
-
-  self.ready();
-
-  this.onStop(() => {
-      if (handler && typeof handler.stop === 'function') {
-        handler.stop();
-      }
-    });
-  });
   Meteor.publish('alertItem', async(alertId : string)=>{
     return IntruderAlertsCollection.find({_id:alertId})
   })
@@ -1608,17 +1130,6 @@ Meteor.startup(async () => {
         return { success: true, response };
       } catch (error: any) {
         throw new Meteor.Error('unlock-failed', `Failed to unlock gate: ${error.message}`);
-      }
-    },
-    setCountSeen:async function(id:string){
-      this.unblock();
-      if(this.userId)
-        CountAlertsCollection.updateAsync({_id:id}, {$set:{seen:true, seenBy:this.userId, seenAt:new Date()}})
-    },
-    setCountAllSeen:async function(){
-      this.unblock()
-      if(this.userId){
-        CountAlertsCollection.updateAsync({seen:false},{$set:{seen:true, seenBy:this.userId, seenAt:new Date()}},{multi:true})
       }
     },
     updateWorkspace: async function(apps:App[]){

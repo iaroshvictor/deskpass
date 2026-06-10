@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Meteor } from 'meteor/meteor';
 
 import { useSubscribe, useFind } from 'meteor/react-meteor-data';
@@ -9,11 +9,85 @@ import DialogActions from '@mui/material/DialogActions';
 import Button from '@mui/material/Button';
 import Slide from '@mui/material/Slide';
 import { TransitionProps } from '@mui/material/transitions';
-import { Alert, Card, Grid, AlertTitle, Stack, Paper, Typography } from '@mui/material';
+import { Alert, Box, Card, Chip, Grid, AlertTitle, Stack, Paper, Typography } from '@mui/material';
 import { CamsCollection } from '/imports/api/cams';
 import {VisitsSummaryCollection}   from '/imports/api/visitSummary';
 import { AlertsArchiveCollection } from '/imports/api/alertsArchive';
-import {AlertLists} from '/imports/api/alertLists'
+import {AlertLists} from '/imports/api/alertLists';
+import { RecordingsCollection } from '/imports/api/recordings';
+
+// Converts a raw PAR dict to sorted {label, score} pairs ready for display.
+// 'female' is always included: high score → "female", low score → "male".
+export const parToChips = (par: Record<string, number | string>): {label: string, score: number}[] => {
+    const chips: {label: string, score: number}[] = [];
+    for (const [k, v] of Object.entries(par)) {
+        if (k.endsWith('_color') || typeof v !== 'number') continue;
+        if (k === 'female') {
+            chips.push(v >= 0.5
+                ? { label: 'female', score: v }
+                : { label: 'male',   score: 1 - v }
+            );
+        } else if (v >= 0.6) {
+            chips.push({ label: k.replace(/_/g, ' '), score: v });
+        }
+    }
+    return chips.sort((a, b) => b.score - a.score);
+};
+
+const PREROLL_MS = 5000;
+
+const AlertRecordingPlayer = ({ camId, timestamp }: { camId: string; timestamp: Date }) => {
+    const targetMs  = timestamp.getTime() - PREROLL_MS;
+    const dayStart  = new Date(timestamp); dayStart.setHours(0, 0, 0, 0);
+    const dayEnd    = new Date(timestamp); dayEnd.setHours(23, 59, 59, 999);
+
+    useSubscribe('recordings', [camId], dayStart.getTime(), dayEnd.getTime(), 50);
+
+    const allRecs = useFind(() =>
+        RecordingsCollection.find({ camId }, { sort: { startedAt: -1 } })
+    );
+
+    // segment whose window contains targetMs
+    const recording = allRecs.find(r =>
+        r.startedAt.getTime() <= targetMs &&
+        (r.endedAt ? r.endedAt.getTime() >= targetMs : r.status === 'recording')
+    );
+
+    const videoRef   = useRef<HTMLVideoElement>(null);
+    const seekDoneRef = useRef(false);
+
+    useEffect(() => {
+        seekDoneRef.current = false;
+    }, [recording?._id]);
+
+    const handleCanPlay = () => {
+        if (seekDoneRef.current || !videoRef.current || !recording) return;
+        seekDoneRef.current = true;
+        const offset = Math.max(0, (targetMs - recording.startedAt.getTime()) / 1000);
+        videoRef.current.currentTime = offset;
+    };
+
+    if (!recording) return (
+        <Box sx={{ py: 1 }}>
+            <Typography variant="caption" color="text.secondary">No recording available for this alert.</Typography>
+        </Box>
+    );
+
+    return (
+        <Box sx={{ mt: 1 }}>
+            <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+                RECORDING — {new Date(targetMs).toLocaleTimeString()} + 5 s
+            </Typography>
+            <video
+                ref={videoRef}
+                src={`/dvr-media/${recording._id}`}
+                controls
+                onCanPlay={handleCanPlay}
+                style={{ width: '100%', borderRadius: 4, marginTop: 4, background: '#000' }}
+            />
+        </Box>
+    );
+};
 const Transition = React.forwardRef(function Transition(
   props: TransitionProps & {
     children: React.ReactElement<any, any>;
@@ -57,10 +131,9 @@ const AlertItemModal = ({alertId, onCloseModal}:props) => {
             Meteor.callAsync('setSeenIntruder', alertId)  }catch(e){}
         //onCloseModal();
     }
-    const handleAddFaceModel =()=>{
+    const handleAddFaceModel = async () => {
         try {
-            Meteor.callAsync('addFaceToSummary', myAlert._id);
-            onCloseModal();
+            await Meteor.callAsync('addFaceToSummary', myAlert._id);
         } catch (e) {
             console.error('Error adding face model:', e);
         }
@@ -139,14 +212,48 @@ const AlertItemModal = ({alertId, onCloseModal}:props) => {
                                             </Typography>
                                             
                                             <Typography variant="body2">
-                                                Similarity: {``}
+                                                Similarity: {myAlert.similarity !== undefined ? `${(myAlert.similarity * 100).toFixed(1)}%` : 'N/A'}
                                             </Typography>
                                         </Stack>
                                     </Stack>
                                 )}
+                                {myAlert.par && Object.keys(myAlert.par).length > 0 && (
+                                    <Stack spacing={1} sx={{px:2, pb:1}}>
+                                        <Typography variant="caption" color="text.secondary" sx={{fontWeight:600}}>APPEARANCE</Typography>
+                                        {(['head_color','upper_color','lower_color'] as const).some(k => myAlert.par![k]) && (
+                                            <Stack direction='row' spacing={2}>
+                                                {(['head_color','upper_color','lower_color'] as const).map(k => myAlert.par![k] && (
+                                                    <Stack key={k} direction='row' spacing={0.5} alignItems='center'>
+                                                        <Box sx={{width:14, height:14, borderRadius:'50%', bgcolor:String(myAlert.par![k]), border:'1px solid #ccc'}} />
+                                                        <Typography variant="caption">{k.replace('_color','')}: {myAlert.par![k]}</Typography>
+                                                    </Stack>
+                                                ))}
+                                            </Stack>
+                                        )}
+                                        <Stack direction='row' spacing={0.5} flexWrap='wrap' useFlexGap>
+                                            {parToChips(myAlert.par).map(({label, score}) => (
+                                                <Chip
+                                                    key={label}
+                                                    label={`${label} ${(score * 100).toFixed(0)}%`}
+                                                    size="small"
+                                                    color="primary"
+                                                    variant="outlined"
+                                                />
+                                            ))}
+                                        </Stack>
+                                    </Stack>
+                                )}
+                                <Box sx={{px:2, pb:1}}>
+                                    <AlertRecordingPlayer camId={myAlert.source} timestamp={new Date(myAlert.timestamp)} />
+                                </Box>
                                 <Stack direction='row' spacing={2} sx={{p:2}}>
-                                    <Button onClick={handleAddFaceModel} variant="contained" color="primary">
-                                        Add Face Model
+                                    <Button
+                                        onClick={handleAddFaceModel}
+                                        variant="contained"
+                                        color={myAlert.attached ? 'success' : 'primary'}
+                                        disabled={!!myAlert.attached}
+                                    >
+                                        {myAlert.attached ? 'Face Model Attached' : 'Add Face Model'}
                                     </Button>
                                 </Stack>
                             </Paper>
