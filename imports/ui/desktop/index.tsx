@@ -8,7 +8,8 @@ import Badge from '@mui/material/Badge';
 import { format } from "date-fns";
 import AppWindow from '../components/appwindow'
 import apps, { AppProps, AppType } from '../../applications'
-import { WorkspacesCollection } from '/imports/api/workspace';
+import { WorkspacesCollection, App } from '/imports/api/workspace';
+import { RolesCollection, RoleDefinitionsCollection } from '/imports/api/roles';
 import { useSubscribe, useFind, useTracker } from 'meteor/react-meteor-data';
 import {AlertsArchiveCollection, AlertItem} from '/imports/api/alertsArchive'
 import { AlertLists, AlertList } from '/imports/api/alertLists';
@@ -18,7 +19,7 @@ import ReportGmailerrorredIcon from '@mui/icons-material/ReportGmailerrorred';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import IconButton from '@mui/material/IconButton';
-import { ApolloStatusCollection } from '/imports/api/apolloStatus';
+import { ApolloStatusCollection, ApolloStatusType } from '/imports/api/apolloStatus';
 import CloudIcon from '@mui/icons-material/Cloud';
 import CloudOffIcon from '@mui/icons-material/CloudOff';
 import SyncIcon from '@mui/icons-material/Sync';
@@ -113,7 +114,8 @@ type Task ={
         y:number,
         width:number,
         height:number
-    }
+    },
+    extraConfigs?: { [key: string]: any }
 }
 type personBoxProps = {
     alertItem:AlertItem
@@ -182,11 +184,40 @@ export default function Desktop() {
     const UnseenIntruders = useFind(() => IntruderAlertsCollection.find({ seen: false }, { sort: { timestamp: -1 }, limit: 10 }));
     const UnseenPersonAlerts = useFind(()=> AlertsArchiveCollection.find({seen:false}, { sort: { timestamp: -1 }, limit: 10 }));
     const UnseenCountAlerts = useFind(()=> CountAlertsCollection.find({seen:false}, { sort: { timestamp: -1 }, limit: 10 }));
+    useSubscribe('userRole');
+    const userRoleEntry = useTracker(() => RolesCollection.findOne({ userId: Meteor.userId() ?? '' }), []);
+    const userRoleDef   = useTracker(() => {
+        if (userRoleEntry?.roleId) return RoleDefinitionsCollection.findOne(userRoleEntry.roleId);
+        return null;
+    }, [userRoleEntry]);
+
     const loading = useSubscribe('workspace')
     const [prepared, setPrepared] = useState(false);
-    const Icons:AppType[] = Object.values(apps)
+    const Icons: AppType[] = Object.values(apps);
+    const isAdmin = userRoleEntry?.role === 'admin';
+    const visibleIcons = Icons.filter(icon => {
+        if (icon.hideShortcut) return false;
+        if (isAdmin) return true;
+        return userRoleDef?.permissions.includes(icon.appName) ?? false;
+    });
     const myWorkspace = useFind(() => Meteor.user() ? WorkspacesCollection.find({ user: Meteor.userId() as string }):null);
     const [taskManager, setTaskManager] = useState<Task[]>([])
+    const taskManagerRef = React.useRef<Task[]>([]);
+    taskManagerRef.current = taskManager;
+
+    const toCloseRef = React.useRef<(appId: number) => void>(() => {});
+    const launchAppRef = React.useRef<(appName: string, extraConfigs?: ExtraConfig) => void>(() => {});
+
+    const toDbApp = (t: Task): App => ({
+        appId: t.appId,
+        appName: t.appName,
+        minimized: t.minimized,
+        zIndex: t.zIndex,
+        fullScreen: t.fullScreen,
+        bBox: t.bBox,
+        ...(t.extraConfigs ? { extraConfigs: t.extraConfigs } : {}),
+    });
+
     useEffect(() => {
         if(!prepared && !loading()){
             const myApps = myWorkspace?.[0]?.apps || [];
@@ -196,7 +227,7 @@ export default function Desktop() {
                     return {
                         ...app,
                         appIcon: icon.appIcon,
-                        render: (props)=>icon.render({ ...props, extraConfigs:app.extraConfigs, launchApp, killApp: toClose }),
+                        render: (props)=>icon.render({ ...props, extraConfigs:app.extraConfigs, launchApp: (...a) => launchAppRef.current(...a), killApp: (id) => toCloseRef.current(id) }),
                     } as Task;
                 }
             }).filter((task): task is Task => task !== undefined);
@@ -219,21 +250,11 @@ export default function Desktop() {
         return () => clearInterval(interval);
     }, []);
     const toMinimize = (appId:number)=>{
-        if(!myWorkspace || myWorkspace.length === 0) return;
-        const myWorkspaceApps = myWorkspace[0].apps || [];
-        Meteor.callAsync('updateWorkspace', myWorkspaceApps.map(task => {
-            if (task.appId === appId) {
-                return { ...task, minimized: !task.minimized };
-            }
-            return task;
-        }))
-        setTaskManager(prev=>
-            prev.map(task=>{
-                if(task.appId === appId)
-                    return{...task, minimized:!task.minimized}
-                return{...task}
-            })
-        )
+        setTaskManager(prev => {
+            const next = prev.map(t => t.appId === appId ? { ...t, minimized: !t.minimized } : t);
+            Meteor.callAsync('updateWorkspace', next.map(toDbApp));
+            return next;
+        });
     }
     const getBadgeColor=(module:string | undefined)=>{
         if(!module) return 'secondary';
@@ -249,11 +270,11 @@ export default function Desktop() {
         }
     }
     const toClose=(appId:number)=>{
-        if(!myWorkspace || myWorkspace.length === 0) return;
-        const myWorkspaceApps = myWorkspace[0].apps || [];
-        console.log('toClose', appId, myWorkspaceApps, myWorkspaceApps.filter(task => task.appId !== appId));
-        Meteor.callAsync('updateWorkspace', myWorkspaceApps.filter(task => task.appId !== appId))
-        setTaskManager(prev=>prev.filter(task=>task.appId !== appId))
+        setTaskManager(prev => {
+            const next = prev.filter(t => t.appId !== appId);
+            Meteor.callAsync('updateWorkspace', next.map(toDbApp));
+            return next;
+        });
     }
     const bringToTop=(appId:number)=>{
         setLastActive(appId)
@@ -268,64 +289,35 @@ export default function Desktop() {
     }
 
     const triggerFullScreen=(appId:number)=>{
-        const maxIndex=Math.max(...taskManager.map(el=>el.zIndex))+1;
-        if(!myWorkspace || myWorkspace.length === 0) return;
-        const myWorkspaceApps = myWorkspace[0].apps || [];
-        setTaskManager(prev=>
-            prev.map(task=>{
-                if(task.appId === appId){
-                    const prevApp = myWorkspaceApps.find(t => t.appId === appId);
-                    Meteor.callAsync('updateWorkspace', [...myWorkspaceApps.filter(t=>t.appId !== appId), {
-                       ...prevApp,
-                        fullScreen: !task.fullScreen,
-                        bBox: task.fullScreen
-                            ? { ...task.prevbBox }
-                            : { x: 0, y: 0, width: width - 4, height: height - 55 },
-                    }])
-                    return task.fullScreen
-                    ?{...task,
-                        bBox:{...task.prevbBox},
-                        fullScreen:!task.fullScreen,
-                        zIndex:maxIndex
-                    }
-                    :{...task,
-                        fullScreen:!task.fullScreen,
-                        zIndex:maxIndex,
-                        prevbBox:{...task.bBox},
-                        bBox:{x:0,y:0,width:width-4,height:height-55}
-                    }
+        const maxIndex = Math.max(0, ...taskManagerRef.current.map(el => el.zIndex)) + 1;
+        setTaskManager(prev => {
+            const next = prev.map(task => {
+                if (task.appId !== appId) return task;
+                if (task.fullScreen) {
+                    return { ...task, bBox: { ...task.prevbBox }, fullScreen: false, zIndex: maxIndex };
+                } else {
+                    return { ...task, fullScreen: true, zIndex: maxIndex, prevbBox: { ...task.bBox }, bBox: { x: 0, y: 0, width: width - 4, height: height - 55 } };
                 }
-                    
-                return{...task}
-            })
-        )
+            });
+            Meteor.callAsync('updateWorkspace', next.map(toDbApp));
+            return next;
+        });
     }
-    const updateSize=(appId:number, width:number, height:number)=>{
-        if(!myWorkspace || myWorkspace.length === 0) return;
-        const myWorkspaceApps = myWorkspace[0].apps || [];
-        Meteor.callAsync('updateWorkspace', myWorkspaceApps.map(task =>  (task.appId === appId) ?{...task, bBox:{...task.bBox, width,height}}:task))
-        setTaskManager(prev=>
-            prev.map(task=>{
-                if(task.appId === appId)
-                    return{...task, bBox:{...task.bBox, width, height}}
-                return{...task}
-            })
-        )
+    const updateSize=(appId:number, w:number, h:number)=>{
+        setTaskManager(prev => {
+            const next = prev.map(t => t.appId === appId ? { ...t, bBox: { ...t.bBox, width: w, height: h } } : t);
+            Meteor.callAsync('updateWorkspace', next.map(toDbApp));
+            return next;
+        });
     }
     const updatePossition=(appId:number, x:number, y:number)=>{
         x = x || 0;
         y = y || 0;
-        if(!myWorkspace || myWorkspace.length === 0) return;
-        const myWorkspaceApps = myWorkspace[0].apps || [];
-        Meteor.callAsync('updateWorkspace', myWorkspaceApps.map(task =>  (task.appId === appId) ?{...task, bBox:{...task.bBox, x, y}}:task))
-        
-        setTaskManager(prev=>
-            prev.map(task=>{
-                if(task.appId === appId)
-                    return{...task, bBox:{...task.bBox, x, y}}
-                return{...task}
-            })
-        )
+        setTaskManager(prev => {
+            const next = prev.map(t => t.appId === appId ? { ...t, bBox: { ...t.bBox, x, y } } : t);
+            Meteor.callAsync('updateWorkspace', next.map(toDbApp));
+            return next;
+        });
     }
     type ExtraConfig = {
         cam?:Cam,
@@ -335,37 +327,28 @@ export default function Desktop() {
         const icon = Icons.find(i=>i.appName === appName)
         if(icon){
             const appId = (new Date()).getTime()
-            if(myWorkspace !== null){
-                const currentApps = myWorkspace[0]?.apps || [];
-                const maxDBZindex = (currentApps.length > 0 ? Math.max(...currentApps.map(task => task.zIndex)) : 1) + 1;
-                Meteor.callAsync('updateWorkspace', [...currentApps, {
-                    appId: appId,
-                    appName: appName,
-                    minimized:false,
-                    zIndex:maxDBZindex,
-                    fullScreen:false,
-                    bBox:{ x : Math.floor(width/4), y : Math.floor(height/4), width : Math.floor(width/2), height : Math.floor(height/2) },
-                    extraConfigs
-                }])
-            
-            }
             setTaskManager(prev => {
                 const maxZindex = (prev.length > 0 ? Math.max(...prev.map(task => task.zIndex)) : 1) + 1;
-                const newTask :Task = {
-                    appId: appId,
-                    appIcon:icon.appIcon,
+                const newTask: Task = {
+                    appId,
+                    appIcon: icon.appIcon,
                     appName: icon.appName,
-                    render: (props) => icon.render({ ...props, extraConfigs, launchApp, killApp: toClose }),
-                    minimized:false,
-                    zIndex:maxZindex,
-                    fullScreen:false,
-                    bBox:{ x : Math.floor(width/4), y : Math.floor(height/4), width : Math.floor(width/2), height : Math.floor(height/2) },
-                    prevbBox:{ x : Math.floor(width/4), y : Math.floor(height/4), width : Math.floor(width/2), height : Math.floor(height/2) }
-                }
-                return [...prev, newTask];
+                    render: (props) => icon.render({ ...props, extraConfigs, launchApp: (...a) => launchAppRef.current(...a), killApp: (id) => toCloseRef.current(id) }),
+                    minimized: false,
+                    zIndex: maxZindex,
+                    fullScreen: false,
+                    bBox: { x: Math.floor(width/4), y: Math.floor(height/4), width: Math.floor(width/2), height: Math.floor(height/2) },
+                    prevbBox: { x: Math.floor(width/4), y: Math.floor(height/4), width: Math.floor(width/2), height: Math.floor(height/2) },
+                    extraConfigs,
+                };
+                const next = [...prev, newTask];
+                Meteor.callAsync('updateWorkspace', next.map(toDbApp));
+                return next;
             });
         }
     }
+    toCloseRef.current = toClose;
+    launchAppRef.current = launchApp;
     return (
         <OsBox>
             {intruderModal && (
@@ -382,7 +365,7 @@ export default function Desktop() {
             )}
             {(UnseenPersonAlerts.length>0 || UnseenIntruders.length>0 || UnseenCountAlerts.length>0) &&(
 
-                <Box sx={{ position: 'absolute', top: 10, right: 10, width:'280px', zIndex: 1000 }}>
+                <Box sx={{ position: 'absolute', top: 10, right: 10, width: showAlerts ? '280px' : 'auto', zIndex: 1000 }}>
                     <Stack direction="row" spacing={1} sx={{ mb: 1 }}>
                         <IconButton
                             size="small"
@@ -505,7 +488,7 @@ export default function Desktop() {
             ))}
             <DesktopBox
                 >
-                {Icons.filter(icon => !icon.hideShortcut).map((icon, index)=>(
+                {visibleIcons.map((icon, index)=>(
                 
                 <DesktopShortcut
                     key={index}
@@ -555,9 +538,29 @@ export default function Desktop() {
                     }
                 }}
             >
-                <Box sx={{ minWidth:'200px',maxHeight:'400px', overflowY:'auto', display:'flex',alignItems:'flex-end' }}>
+                <Box sx={{ minWidth:'200px', px:1, pb:1 }}>
+                    <Typography variant='caption' sx={{ color:'rgba(255,255,255,0.5)', textTransform:'uppercase', letterSpacing:1 }}>Account</Typography>
+                    <Stack direction='row' alignItems='center' justifyContent='space-between' sx={{ mt:0.5 }}>
+                        <Stack direction='row' alignItems='center' spacing={1}>
+                            <Avatar sx={{ width:28, height:28, bgcolor:'#1a237e', fontSize:13 }}>
+                                {(Meteor.user()?.username?.[0] ?? '?').toUpperCase()}
+                            </Avatar>
+                            <Typography sx={{ color:'#fff', fontWeight:500 }}>{Meteor.user()?.username ?? ''}</Typography>
+                        </Stack>
+                        <Button
+                            size='small'
+                            variant='outlined'
+                            sx={{ color:'#fff', borderColor:'rgba(255,255,255,0.4)', ml:1, textTransform:'none', '&:hover':{ borderColor:'#fff', background:'rgba(255,255,255,0.08)' } }}
+                            onClick={()=>{ setStartAnchorEl(null); Meteor.logout(); }}
+                        >
+                            Log out
+                        </Button>
+                    </Stack>
+                </Box>
+                <Divider sx={{ borderColor:'rgba(255,255,255,0.15)', mb:1 }}/>
+                <Box sx={{ minWidth:'200px',maxHeight:'900px', overflowY:'auto', display:'flex',alignItems:'flex-end' }}>
                     <MenuList sx={{width:'100%'}}>
-                        {Icons.filter(icon => (icon.appName.toLowerCase().includes(searchApp.toLowerCase()) && !icon.hideShortcut )).map((icon, index)=>(
+                        {visibleIcons.filter(icon => icon.appName.toLowerCase().includes(searchApp.toLowerCase())).map((icon, index)=>(
                             <MenuItem sx={{width:'100%'}} key={index} onClick={()=>{
                                 launchApp(icon.appName)
                                 setStartAnchorEl(null)

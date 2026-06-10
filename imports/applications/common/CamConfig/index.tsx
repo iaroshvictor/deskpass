@@ -88,7 +88,6 @@ const ZoneItem = ({zone, Cams, Zones, launchApp}:ZoneItemProps)=>{
                                     <TableCell>Access Control</TableCell>
                                     <TableCell>Person Count</TableCell>
                                     <TableCell>Crowd Alert</TableCell>
-                                    <TableCell>Storage</TableCell>
                                     <TableCell>Actions</TableCell>
                                 </TableRow>
                             </TableHead>
@@ -103,7 +102,6 @@ const ZoneItem = ({zone, Cams, Zones, launchApp}:ZoneItemProps)=>{
                                             <TableCell>{mycam.accessControl? <CheckBoxIcon /> : <IndeterminateCheckBoxIcon />}</TableCell>
                                             <TableCell>{mycam.countPerson? <CheckBoxIcon /> : <IndeterminateCheckBoxIcon />}</TableCell>
                                             <TableCell>{mycam.countPerson?`${mycam.maxPerson} / ${mycam.maxPersonDanger}` : '-'}</TableCell>
-                                            <TableCell>{mycam.storage} days</TableCell>
                                             <TableCell>
                                                 <IconButton
                                                     onClick={(e) => {

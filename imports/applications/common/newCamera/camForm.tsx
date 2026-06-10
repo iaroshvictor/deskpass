@@ -96,7 +96,6 @@ const CamForm = (props: camFormProps) => {
     const [editRtspLink, setEditRtspLink] = useState<string>(Cam?.streamurl || '');
     const [editCamName, setEditCamName] = useState<string>(Cam?.name || '');
     const [localImageData, setLocalImageData] = useState<string | null>(imageData || Cam?.snapshot || null);
-    const [daysOfRecording, setDaysOfRecording] = useState<number>(Cam?.storage || 30);
     const [crowdAlert, setCrowdAlert] = useState<number>(Cam?.maxPerson || 0);
     const [crowdAlertDanger, setCrowdAlertDanger] = useState<number>(Cam?.maxPersonDanger || 0);
     const [faceAlert, setFaceAlert] = useState<boolean>(Cam?.faceAlert ?? true);
@@ -189,15 +188,6 @@ const CamForm = (props: camFormProps) => {
                         onChange={(e) => { setCamName ? setCamName(e.target.value) : setEditCamName(e.target.value); }}
                         value={camName || editCamName || ''}
                     />
-                    <TextField
-                        sx={{ width: '100%' }}
-                        label="Days of Recording"
-                        variant="outlined"
-                        size="small"
-                        type="number"
-                        onChange={(e) => { setDaysOfRecording(Number(e.target.value)); }}
-                        value={daysOfRecording}
-                    />
                     <Button
                         sx={{ width: '100%' }}
                         variant="outlined"
@@ -276,7 +266,6 @@ const CamForm = (props: camFormProps) => {
                                     faceAlert: faceAlert,
                                     accessControl: accessControl,
                                     zone: selectedZoneId,
-                                    storage: daysOfRecording,
                                     countPerson: personCount,
                                     disableSpoofFilter: disableSpoofFilter,
                                     snapshot: imageData || localImageData || '',
@@ -291,7 +280,6 @@ const CamForm = (props: camFormProps) => {
                                     setErrorMessage('Cam Added Successfully');
                                     if (resetAddForm) resetAddForm();
                                     if (setRtspLink) setRtspLink('');
-                                    setDaysOfRecording(30);
                                     setCrowdAlert(0);
                                     setFaceAlert(true);
                                     setAccessControl(true);

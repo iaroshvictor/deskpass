@@ -1,6 +1,6 @@
 import { Meteor } from 'meteor/meteor';
 import { Accounts } from "meteor/accounts-base";
-import { RolesCollection } from '../imports/api/roles';
+import { RolesCollection, RoleDefinitionsCollection } from '../imports/api/roles';
 import { ZonesCollection } from '../imports/api/zones';
 import { DivisionsCollection } from '../imports/api/divisions';
 import { ControllersCollection } from '/imports/api/controllers';
@@ -30,9 +30,12 @@ import { sendAlert } from '/imports/bot/alerts'
 import {APIConfig, SettingsCollection} from '/imports/api/settings'
 import TelegramBot from 'node-telegram-bot-api';
 import { TgSessions } from '/imports/api/tgSessions';
-import { initBot } from '../imports/bot/bot'; 
+import { initBot } from '../imports/bot/bot';
 import ApolloWrapper, { CardHolder } from './apollowrapper';
 import { ApolloStatusType } from '/imports/api/apolloStatus';
+import { RecordingsCollection } from '/imports/api/recordings';
+import { initDvr } from './dvrManager';
+import './dvrFileServer';
 let tgBot :TelegramBot | undefined = undefined;
 let ApolloApi : any | undefined = undefined;
 
@@ -76,10 +79,64 @@ const LiveGateReports :{[x:string]:{handler:number}}={}
 const LiveGateCards :{[x:string]:{[x:string]:{handler:NodeJS.Timeout, card:string}}}={}
 const ControllerIfLock:{[x:string]:number} = {}
 const KnownPersons:{[x:string]:any} ={}
+
+// ── Per-camera frame-consumer state ──────────────────────────────────────────
+interface FaceState {
+  obsCount:         number;
+  consecutiveId:    string | null;
+  consecutiveHits:  number;
+  lastPublishedTime: number;
+}
+// CamFaceState[camId][personTid] — cleared when camera stops
+const CamFaceState: Record<string, Record<number, FaceState>> = {};
+// Set of camera IDs currently streaming (drives the BLPOP consumer)
+const StreamingCams = new Set<string>();
+
+// ── ArcFace embedding utilities ───────────────────────────────────────────────
+// Embeddings come from Python as raw float32 bytes encoded in base64 (512 × 4 = 2048 bytes).
+const decodeEmbedding = (b64: string): Float32Array | null => {
+  try {
+    const buf = Buffer.from(b64, 'base64');
+    if (buf.length !== 512 * 4) return null;
+    // Slice to get a properly-aligned ArrayBuffer
+    const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+    return new Float32Array(ab);
+  } catch { return null; }
+};
+const normalizeEmb = (emb: Float32Array): Float32Array => {
+  let sq = 0;
+  for (let i = 0; i < emb.length; i++) sq += emb[i] * emb[i];
+  const n = Math.sqrt(sq) || 1;
+  const out = new Float32Array(emb.length);
+  for (let i = 0; i < emb.length; i++) out[i] = emb[i] / n;
+  return out;
+};
+// Cosine similarity — assumes a is normalized; b (stored face_model) must also be normalized.
+const cosineSim = (a: Float32Array, b: number[]): number => {
+  let dot = 0;
+  for (let i = 0; i < 512; i++) dot += a[i] * b[i];
+  return dot;
+};
+// Match a normalized embedding against all models in KnownPersons.
+const matchFace = (emb: Float32Array): { personId: string; similarity: number; modelId: string } | null => {
+  const THRESHOLD = 0.45;
+  let best: { personId: string; similarity: number; modelId: string } | null = null;
+  for (const [pid, person] of Object.entries(KnownPersons)) {
+    for (const model of (person.models ?? []) as { _id: string; face_model: number[] }[]) {
+      if (!model.face_model || model.face_model.length !== 512) continue;
+      const sim = cosineSim(emb, model.face_model);
+      if (sim >= THRESHOLD && (!best || sim > best.similarity))
+        best = { personId: pid, similarity: sim, modelId: model._id };
+    }
+  }
+  return best;
+};
+
 import redisClient from './redisclient';
 Meteor.startup(async () => {
 
   exec('pkill -f cmps_cam')
+  initDvr();
   const tgSetting = (await SettingsCollection.findOneAsync({type:'telegram'}))?.config as string;
   if(tgSetting){
     tgBot = initBot(tgSetting);
@@ -414,6 +471,257 @@ Meteor.startup(async () => {
     await pub.set('persons_cache_ready', '0');
   }
 
+  // ── Frame types (matching Python cmps_cam.py JSON output) ─────────────────
+  interface CamFramePerson {
+    tid: number;
+    bbox: [number, number, number, number];
+    emb: string | null;
+    has_emb: boolean;
+    lines: Record<string, string>;
+    zones: Record<string, string>;
+    par: number[] | null;
+    crop: string | null;
+    head_color?: string;
+    upper_color?: string;
+    lower_color?: string;
+  }
+  interface CamFrameFace {
+    obj_id: number;
+    bbox: [number, number, number, number];
+    person_tid: number | null;
+    frontal: boolean;
+    emb: string | null;
+    face_crop: string | null;
+  }
+  interface CamFrame {
+    frame: number;
+    fps: number;
+    source: string;
+    persons: CamFramePerson[];
+    faces: CamFrameFace[];
+  }
+
+  const bboxToBox = ([left, top, right, bottom]: [number, number, number, number]) =>
+    ({ left, top, width: right - left, height: bottom - top });
+
+  // ── Person-count occupancy alerts (replaces countListener) ────────────────
+  const handlePersonCount = (source: string, count: number) => {
+    if (!myCams[source]?.countPerson) return;
+    if (count > myCams[source].maxPersonDanger) {
+      if (myCams[source].state !== 'danger') {
+        CountAlertsCollection.insertAsync({ timestamp: new Date(), count, level: 'danger',
+          allowed: myCams[source].maxPersonDanger, seen: false, seenBy: '', seenAt: null, source });
+        myCams[source].state = 'danger';
+      }
+    } else if (count > myCams[source].maxPerson) {
+      if (myCams[source].state !== 'warning') {
+        CountAlertsCollection.insertAsync({ timestamp: new Date(), count, level: 'warning',
+          allowed: myCams[source].maxPerson, seen: false, seenBy: '', seenAt: null, source });
+        myCams[source].state = 'warning';
+      }
+    } else {
+      myCams[source].state = 'success';
+    }
+    myCams[source].count = count;
+  };
+
+  // ── Alert / access-control reactions (extracted from the old listener) ─────
+  const handleDetectionAlerts = async (visit: Visit & { similarity?: number }, idP: string | number | undefined) => {
+    const cam = await CamsCollection.findOneAsync({ _id: visit.source });
+    const myGates = cam?.accessControl
+      ? Object.values(GatesMap).filter(g => g.interfaces.some(itf => itf.cam === visit.source))
+      : [];
+
+    if (idP) {
+      if (visit.person_b64 !== '') {
+        const person = KnownPersons[idP] as VisitSummary;
+        if (person && cam) {
+          if (cam.faceAlert && person.idInfo?.alertList) {
+            if (!LiveCamAlerts[visit.source]) LiveCamAlerts[visit.source] = {};
+            if (!LiveCamAlerts[visit.source][person._id || 'person']) {
+              LiveCamAlerts[visit.source][person._id || 'person'] = {
+                handler: setTimeout(() => { delete LiveCamAlerts[visit.source][person._id || 'person']; }, 5000)
+              };
+              const existingAlert = await AlertsArchiveCollection.find({
+                seenBy: { $ne: 'root' }, source: visit.source,
+                idInfo: { $in: [person._id, String(person._id)] },
+                timestamp: { $gt: new Date(Date.now() - person.idInfo.alertpause * 60_000) }
+              }).countAsync();
+              const alertItem = {
+                ...visit, idInfo: idP as any, listId: person.idInfo.alertList, seenAt: null,
+                seen: !!existingAlert, seenBy: existingAlert ? 'root' : '',
+              };
+              await AlertsArchiveCollection.insertAsync(alertItem);
+              if (!existingAlert && tgBot) sendAlert(alertItem as any, tgBot);
+            }
+          }
+          if (cam.accessControl) {
+            myGates.forEach(async gate => {
+              const myif = gate.interfaces.find(itf => itf.cam === visit.source);
+              gate._id = gate._id || 'ensure';
+              if (!LiveGatePersons[gate._id]) LiveGatePersons[gate._id] = {};
+              if (LiveGatePersons[gate._id][person._id])
+                clearTimeout(LiveGatePersons[gate._id][person._id].handler);
+              LiveGatePersons[gate._id][person._id] = {
+                handler: setTimeout(() => { delete LiveGatePersons[gate._id || 'ensure'][person._id]; }, 10_000)
+              };
+              if (myif?.lockSettings && myif.cmpsaction.includes('unlock') &&
+                  person.idInfo?.allowedGates.includes(gate._id || '')) {
+                if (!myif.lockSettings.tfa) {
+                  if (myif.lockSettings.controller) {
+                    const lk = `${myif.lockSettings.controller}_${myif.lockSettings.reader_node}_${myif.lockSettings.reader_lda}`;
+                    if (ControllerIfLock[lk] === undefined) {
+                      ControllerIfLock[lk] = Meteor.setTimeout(() => { delete ControllerIfLock[lk]; }, 5000);
+                      const card = person.idInfo.accessCard[0];
+                      if (card) pub.publish('apollo_stream', JSON.stringify({
+                        id: myif.lockSettings.controller, node: myif.lockSettings.reader_node,
+                        lda: myif.lockSettings.reader_lda, card, decission: 'grant',
+                      }));
+                    }
+                  }
+                } else if (LiveGateCards[gate._id]?.[person._id] && myif.lockSettings.controller) {
+                  const lk = `${myif.lockSettings.controller}_${myif.lockSettings.reader_node}_${myif.lockSettings.reader_lda}`;
+                  if (ControllerIfLock[lk] === undefined) {
+                    ControllerIfLock[lk] = Meteor.setTimeout(() => { delete ControllerIfLock[lk]; }, 5000);
+                    const card = LiveGateCards[gate._id][person._id].card;
+                    if (card) pub.publish('apollo_stream', JSON.stringify({
+                      id: myif.lockSettings.controller, node: myif.lockSettings.reader_node,
+                      lda: myif.lockSettings.reader_lda, card, decission: 'grant',
+                    }));
+                  }
+                }
+              }
+              if (myif?.cmpsaction.includes('report')) {
+                const acD = { ...visit, type: myif.action, idInfo: person._id, source: gate._id } as AccessReport;
+                if (!LiveGateReports[visit.tracking_id]) {
+                  LiveGateReports[visit.tracking_id] = { handler: Meteor.setTimeout(() => { delete LiveGateReports[visit.tracking_id]; }, 10_000) };
+                  AccessReportCollection.insertAsync(acD);
+                }
+              }
+            });
+          }
+        }
+      }
+    } else {
+      myGates.forEach(async gate => {
+        const myif = gate.interfaces.find(itf => itf.cam === visit.source);
+        if (myif?.cmpsaction.includes('report') && myif.reportingSettings?.intruderAlert) {
+          const triggerLine = myif.reportingSettings.intruderLine;
+          const triggerSide = myif.reportingSettings.intruderSide;
+          if (triggerLine && triggerSide && visit.lines?.[triggerLine] === triggerSide) {
+            if (!LiveGateIntrudders[visit.tracking_id]) {
+              LiveGateIntrudders[visit.tracking_id] = { handler: Meteor.setTimeout(() => { delete LiveGateIntrudders[visit.tracking_id]; }, 10_000) };
+              await IntruderAlertsCollection.insertAsync({
+                ...visit, triggerLine, triggerSide, seen: false, seenBy: null, seenAt: null,
+              });
+            }
+          }
+        }
+      });
+    }
+  };
+
+  // ── Frame processing: face recognition + visit creation ───────────────────
+  const MIN_OBS    = 5;    // minimum frontal-face observations before matching
+  const CONSEC_GATE = 4;   // consecutive matching frames required before confirming
+  const REPUBLISH_MS = 10_000; // minimum ms between visits for the same tracker ID
+
+  const createVisit = async (frame: CamFrame, person: CamFramePerson, face: CamFrameFace,
+                             match: { personId: string; similarity: number; modelId: string } | null) => {
+    const tracking_id = `${frame.source}-${person.tid}`;
+    const rawEmb = decodeEmbedding(face.emb!);
+    const faceModel = rawEmb ? Array.from(normalizeEmb(rawEmb)) : [];
+    const visit: Visit = {
+      face_b64:    await resizeBase64Image(face.face_crop ?? '', 150),
+      person_b64:  await resizeBase64Image(person.crop ?? '', 150),
+      face_model:  faceModel,
+      tracking_id,
+      timestamp:   new Date(),
+      face_box:    bboxToBox(face.bbox),
+      person_box:  bboxToBox(person.bbox),
+      source:      frame.source,
+      reference:   false,
+      lines:       person.lines,
+      zones:       person.zones,
+      par:         person.par ?? undefined,
+      head_color:  person.head_color,
+      upper_color: person.upper_color,
+      lower_color: person.lower_color,
+      ...(match ? { idInfo: match.personId, model_id: match.modelId, similarity: match.similarity } : {}),
+    };
+    await VisitsCollection.insertAsync(visit);
+    // VisitSummary only stores display fields — exclude Visit-only keys whose
+    // types are incompatible (idInfo on VisitSummary is IdInfo, not string).
+    const summaryFields: Partial<VisitSummary> = {
+      face_b64:   visit.face_b64,
+      person_b64: visit.person_b64,
+      face_model: visit.face_model,
+      timestamp:  visit.timestamp,
+      face_box:   visit.face_box,
+      person_box: visit.person_box,
+      source:     visit.source,
+    };
+    await VisitsSummaryCollection.updateAsync(
+      { _id: tracking_id }, { $set: summaryFields }, { upsert: true }
+    ).catch(() => {});
+    await handleDetectionAlerts(visit, match?.personId);
+  };
+
+  const processFrame = async (frame: CamFrame) => {
+    handlePersonCount(frame.source, frame.persons.length);
+    if (!CamFaceState[frame.source]) CamFaceState[frame.source] = {};
+    const state = CamFaceState[frame.source];
+    const now = Date.now();
+
+    for (const face of frame.faces) {
+      if (!face.frontal || !face.emb || face.person_tid === null) continue;
+      const person = frame.persons.find(p => p.tid === face.person_tid);
+      if (!person) continue;
+      const tid = face.person_tid;
+      const fs: FaceState = state[tid] ?? (state[tid] = {
+        obsCount: 0, consecutiveId: null, consecutiveHits: 0, lastPublishedTime: 0,
+      });
+      fs.obsCount++;
+      if (fs.obsCount < MIN_OBS) continue;
+      const rawEmb = decodeEmbedding(face.emb);
+      if (!rawEmb) continue;
+      const emb = normalizeEmb(rawEmb);
+      const match = matchFace(emb);
+      if (match?.personId === fs.consecutiveId) {
+        fs.consecutiveHits++;
+      } else {
+        fs.consecutiveId = match?.personId ?? null;
+        fs.consecutiveHits = match ? 1 : 0;
+      }
+      if (fs.consecutiveHits < CONSEC_GATE) continue;
+      if (now - fs.lastPublishedTime < REPUBLISH_MS) continue;
+      fs.lastPublishedTime = now;
+      await createVisit(frame, person, face, match);
+    }
+
+    // Prune state for persons no longer in frame
+    const activeTids = new Set(frame.persons.map(p => p.tid));
+    for (const k of Object.keys(state)) {
+      if (!activeTids.has(Number(k))) delete state[Number(k)];
+    }
+  };
+
+  // ── Frame consumer: BLPOP across all active camera lists ──────────────────
+  const frameReader = redisClient.duplicate();
+  await frameReader.connect();
+
+  (async () => {
+    while (true) {
+      const keys = Array.from(StreamingCams).map(id => `cam:frames:${id}`);
+      if (keys.length === 0) { await new Promise(r => setTimeout(r, 500)); continue; }
+      const result = await frameReader.blPop(keys, 1).catch(() => null);
+      if (result) {
+        const frame: CamFrame = JSON.parse(result.element);
+        processFrame(frame).catch(e => console.error('[frameConsumer]', e));
+      }
+    }
+  })();
+
   const startStreamHandler = (id:string, streamurl:string, disableSpoofFilter:boolean = false, lines:any[] = [], zones:any[] = []) => {
     // Skip stream handler in development mode
     if (isDevelopmentMode) {
@@ -480,7 +788,7 @@ Meteor.startup(async () => {
       const allfields = await CamsCollection.findOneAsync({_id:id});
       if(allfields)
         myCams[id]={...allfields, count:0, state:'success'}
-      if(fields.streamurl || fields.disableSpoofFilter){
+      if(fields.streamurl || fields.disableSpoofFilter || fields.lines || fields.overlayZones){
         if(allfields){
           StreamHandler[id].kill();
           delete StreamHandler[id];
@@ -586,6 +894,8 @@ Meteor.startup(async () => {
   VisitsCollection.rawCollection().createIndex({ timestamp: -1 });
   VisitsCollection.rawCollection().createIndex({ 'source': 1, 'timestamp': -1 });
   VisitsCollection.rawCollection().createIndex({ tracking_id:1 });
+  RecordingsCollection.rawCollection().createIndex({ camId: 1, startedAt: -1 });
+  RecordingsCollection.rawCollection().createIndex({ startedAt: -1 });
   CountAlertsCollection.rawCollection().createIndex({ timestamp: -1 });
   CountAlertsCollection.rawCollection().createIndex({ seen: -1 });
   CountAlertsCollection.rawCollection().createIndex({ source: -1 });
@@ -1192,9 +1502,44 @@ Meteor.startup(async () => {
         return SettingsCollection.find()
     }
   })
+
+  // Current user's role entry + all role definitions (used by desktop for app filtering)
+  Meteor.publish('userRole', function() {
+    if (!this.userId) return this.ready();
+    return [
+      RolesCollection.find({ userId: this.userId }),
+      RoleDefinitionsCollection.find({}),
+    ];
+  });
+
+  // All role entries for all users (admin-only, used by Operators table)
+  Meteor.publish('allRoles', async function() {
+    if (!this.userId) return this.ready();
+    const myRole = await RolesCollection.findOneAsync({ userId: this.userId });
+    if (myRole?.role !== 'admin') return this.ready();
+    return RolesCollection.find({});
+  });
+
+  // All role definitions (admin-only, used by RoleBuilder and Operators role selector)
+  Meteor.publish('roleDefinitions', async function() {
+    if (!this.userId) return this.ready();
+    const myRole = await RolesCollection.findOneAsync({ userId: this.userId });
+    if (myRole?.role !== 'admin') return this.ready();
+    return RoleDefinitionsCollection.find({});
+  });
+
   Meteor.publish('tgSessions', function(){
     return TgSessions.find()
   })
+
+  Meteor.publish('recordings', function(camIds: string[] = [], dayStart = 0, dayEnd = 0, limit = 200) {
+    if (!this.userId || !camIds.length) return [];
+    return RecordingsCollection.find(
+      { camId: { $in: camIds }, startedAt: { $gte: new Date(dayStart), $lt: new Date(dayEnd) } },
+      { sort: { startedAt: 1 }, limit },
+    );
+  });
+
   Meteor.methods({
     async restartCamHandler(id:string){
       const cam = await CamsCollection.findOneAsync({_id:id});

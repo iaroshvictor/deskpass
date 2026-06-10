@@ -29,7 +29,6 @@ export interface Cam {
   faceAlert: boolean;
   accessControl: boolean;
   zone: string;
-  storage: number;
   countPerson: boolean;
   disableSpoofFilter: boolean;
   snapshot: string;

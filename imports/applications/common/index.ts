@@ -7,6 +7,8 @@ import PersonsDatabaseApp from './personsDatabase';
 import EnrollPersonApp from './enrollPerson';
 import TaskManagerApp from './taskManager';
 import ModelsManagementApp from './modelsManagement';
+import DvrApp from './dvr';
+import RoleBuilderApp from './RoleBuilder';
 import zoneMethods from './zones/serverMethods';
 import camMethods from './CamConfig/serverMethods';
 import liveStreamMethods from './livestream/serverMethods';
@@ -14,6 +16,7 @@ import personMethods from './personsDatabase/serverMethods';
 import Operators from './Operators';
 import OperatorMethods from './Operators/serverMethods';
 import SettingsMethods from './Settings/serverMethods';
+import RoleBuilderMethods from './RoleBuilder/serverMethods';
 import Settings from './Settings'
 export const CommonMethods = {
     ...zoneMethods,
@@ -21,7 +24,8 @@ export const CommonMethods = {
     ...liveStreamMethods,
     ...personMethods,
     ...OperatorMethods,
-    ...SettingsMethods
+    ...SettingsMethods,
+    ...RoleBuilderMethods,
 }
 export default {
     Zones,
@@ -35,5 +39,7 @@ export default {
     Operators,
     Settings,
     TaskManagerApp,
-    ModelsManagementApp
+    ModelsManagementApp,
+    DvrApp,
+    RoleBuilderApp,
 };

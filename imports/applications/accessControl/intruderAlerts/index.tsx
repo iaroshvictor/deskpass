@@ -99,7 +99,7 @@ import IntruderItemModal from './intruderItemModal';
             />
             <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
                 <Typography>All</Typography>
-                <Switch checked = {filter.seen === true} onChange={(_e, checked) => { setFilter(prev => {if (checked){return {...prev, seen:true}}else{delete prev.seen; return prev}}) }} />
+                <Switch checked = {filter.seen === false} onChange={(_e, checked) => { setFilter(prev => {if (checked){return {...prev, seen:false}}else{delete prev.seen; return prev}}) }} />
                 <Typography>Unseen Only</Typography>
             </Stack>
             </Stack>
