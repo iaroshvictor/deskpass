@@ -39,7 +39,9 @@ import CustomTreeItem from './CustomTreeItem';
 import PreviewIcon from '@mui/icons-material/Preview';
 import IdentifyEdit from '/imports/applications/common/personsDatabase/indetifyEditForm';
 import EditIcon from '@mui/icons-material/Edit';
+import FileDownloadIcon from '@mui/icons-material/FileDownload';
 import { Meteor } from 'meteor/meteor';
+import ExportWizard from './exportWizard';
 const Transition = React.forwardRef(function Transition(
   props: TransitionProps & {
     children: React.ReactElement<any, any>;
@@ -118,6 +120,7 @@ const DivisionsAppRenderer =({}:AppProps) =>{
     React.useEffect(() => {
         console.log('Divisions:', MyTreeView);
     }, [MyTreeView])
+    const [exportOpen, setExportOpen] = React.useState(false);
     const [selectedItemDialog, setSelectedItemDialog] = React.useState<VisitSummary | null>(null);
     const [idForm, setIdForm] = React.useState<boolean>(false)
     const handleEditClick = () => {
@@ -181,8 +184,17 @@ const DivisionsAppRenderer =({}:AppProps) =>{
                     </Grid>
                     <Grid size={8}>
                         <Paper elevation={3} sx={{height:'100%', p:2}}>
-                            <Stack spacing={2} direction="row">
+                            <Stack spacing={2} direction="row" alignItems="center">
                                 <Typography variant ='subtitle2' sx={{width:'100%'}}>Access Controll members</Typography>
+                                <Button
+                                    variant="outlined"
+                                    size="small"
+                                    startIcon={<FileDownloadIcon />}
+                                    onClick={() => setExportOpen(true)}
+                                    sx={{ flexShrink: 0 }}
+                                >
+                                    Export
+                                </Button>
                                 <Pagination
                                     sx={{width:'100%', display:'flex', justifyContent:'flex-end' }}
                                     count={numPages}
@@ -283,6 +295,9 @@ const DivisionsAppRenderer =({}:AppProps) =>{
                 </Grid>
             )
         }
+        {exportOpen && (
+            <ExportWizard pageFilter={pageFilter} onClose={() => setExportOpen(false)} />
+        )}
         <Snackbar
             open={!!message}
             autoHideDuration={6000}
@@ -298,7 +313,7 @@ const DivisionsAppRenderer =({}:AppProps) =>{
                 transition: Transition,
                 }}
                 keepMounted
-                onClose={() => setSelectedItemDialog(null)}
+                onClose={() => { setSelectedItemDialog(null); setIdForm(false); }}
                 aria-describedby="alert-dialog-slide-description"
             >
                 <DialogTitle>{selectedItemDialog?.idInfo?.firstName? <><EditIcon />{`${selectedItemDialog?.idInfo.firstName} ${selectedItemDialog?.idInfo.lastName}`}</> :"Identify Person"}</DialogTitle>

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import { Meteor } from 'meteor/meteor';
 import { AppType, AppProps } from "../..";
 import Icon from './icon';
@@ -33,6 +33,7 @@ import EditIcon from '@mui/icons-material/Edit';
 import { useSubscribe, useFind } from 'meteor/react-meteor-data';
 import { VisitsCollection } from '/imports/api/visits';
 import { VisitSummaryMetaCollection, SummaryMeta } from '/imports/api/visitSummary';
+import IdentifyEdit from '/imports/applications/common/personsDatabase/indetifyEditForm';
 
 const PERSONS_PER_PAGE = 50;
 
@@ -43,8 +44,7 @@ function ModelsManagementRenderer(_props: AppProps) {
     const [search, setSearch] = useState('');
     const [sortBy, setSortBy] = useState<'az' | 'za' | 'photos'>('az');
     const [editPerson, setEditPerson] = useState<SummaryMeta | null>(null);
-    const [editFirstName, setEditFirstName] = useState('');
-    const [editLastName, setEditLastName] = useState('');
+    const editFormRef = useRef<{ save: () => boolean; deleteSummary: () => boolean }>(null);
 
     useSubscribe('visitSummaryMeta');
     const personMeta = useFind(() => VisitSummaryMetaCollection.find({}), []);
@@ -137,22 +137,7 @@ function ModelsManagementRenderer(_props: AppProps) {
     };
 
     const openEditPerson = (person: SummaryMeta) => {
-        setEditFirstName(person.idInfo?.firstName ?? '');
-        setEditLastName(person.idInfo?.lastName ?? '');
         setEditPerson(person);
-    };
-
-    const handleEditSave = async () => {
-        if (!editPerson) return;
-        try {
-            const updatedIdInfo = { ...(editPerson.idInfo || {}), firstName: editFirstName, lastName: editLastName };
-            await Meteor.callAsync('editVisitSummary', editPerson._id, { idInfo: updatedIdInfo });
-            setMessage('Person saved successfully');
-        } catch (e: any) {
-            setMessage('Error saving: ' + e.message);
-        } finally {
-            setEditPerson(null);
-        }
     };
 
     const pagePersons = filteredPersons.slice((page - 1) * PERSONS_PER_PAGE, page * PERSONS_PER_PAGE);
@@ -216,6 +201,17 @@ function ModelsManagementRenderer(_props: AppProps) {
                 </ToggleButtonGroup>
             </Stack>
 
+            {filteredPersons.length > PERSONS_PER_PAGE && (
+                <Box sx={{ display: 'flex', justifyContent: 'center', mb: 2 }}>
+                    <Pagination
+                        count={Math.ceil(filteredPersons.length / PERSONS_PER_PAGE)}
+                        page={page}
+                        onChange={(_e, value) => { setPage(value); }}
+                        color="primary"
+                    />
+                </Box>
+            )}
+
             {filteredPersons.length === 0 ? (
                 <Box sx={{ textAlign: 'center', py: 4 }}>
                     <Typography color="textSecondary">
@@ -246,7 +242,7 @@ function ModelsManagementRenderer(_props: AppProps) {
                                 <EditIcon fontSize="small" />
                             </IconButton>
                         </Stack>
-                        <ImageList cols={6} rowHeight={120} gap={8}>
+                        <ImageList cols={6} rowHeight={140} gap={8}>
                             {visits.filter(v=>v.tracking_id === person._id)?.map(visit => (
                                 <ImageListItem
                                     key={visit._id}
@@ -254,7 +250,8 @@ function ModelsManagementRenderer(_props: AppProps) {
                                         cursor: 'pointer',
                                         border: selectedItems.includes(visit._id || '') ? '3px solid #1976d2' : '3px solid transparent',
                                         borderRadius: 1,
-                                        overflow: 'hidden'
+                                        overflow: 'hidden',
+                                        background: '#f0f0f0',
                                     }}
                                     onClick={() => toggleSelect(visit._id || '')}
                                 >
@@ -262,7 +259,7 @@ function ModelsManagementRenderer(_props: AppProps) {
                                         src={`data:image/jpeg;base64,${visit.face_b64}`}
                                         alt="Face"
                                         loading="lazy"
-                                        style={{ objectFit: 'cover', width: '100%', height: '100%' }}
+                                        style={{ objectFit: 'contain', width: '100%', height: '100%' }}
                                     />
                                     <ImageListItemBar
                                         subtitle={visit.timestamp?.toLocaleString()}
@@ -308,24 +305,14 @@ function ModelsManagementRenderer(_props: AppProps) {
                             : 'Edit Person'}
                     </DialogTitle>
                     <DialogContent>
-                        <Stack spacing={2} sx={{ pt: 1, minWidth: 360 }}>
-                            <TextField
-                                label="First Name"
-                                value={editFirstName}
-                                onChange={e => setEditFirstName(e.target.value)}
-                                fullWidth
-                                autoFocus
-                            />
-                            <TextField
-                                label="Last Name"
-                                value={editLastName}
-                                onChange={e => setEditLastName(e.target.value)}
-                                fullWidth
-                            />
-                        </Stack>
+                        <IdentifyEdit ref={editFormRef} tracking_id={editPerson._id} visits={[]} />
                     </DialogContent>
                     <DialogActions>
-                        <Button variant="contained" onClick={handleEditSave}>Save</Button>
+                        <Button variant="contained" onClick={() => {
+                            editFormRef.current?.save();
+                            setMessage('Person saved successfully');
+                            setEditPerson(null);
+                        }}>Save</Button>
                         <Button onClick={() => setEditPerson(null)}>Close</Button>
                     </DialogActions>
                 </Dialog>

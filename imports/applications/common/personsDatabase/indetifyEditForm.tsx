@@ -235,7 +235,7 @@ const IdentifyEdit = forwardRef(({tracking_id, visits}:params, ref) => {
     useSubscribe('settings');
     const apacsSettings = useFind(()=>SettingsCollection.find({type:"apacs"}))
     useSubscribe('visits', {tracking_id}, 10000);
-    useSubscribe('visitSummary', {_id:tracking_id});
+    useSubscribe('visitssummary', {_id:tracking_id});
     useSubscribe('divisions');
     useSubscribe('zones');
     useSubscribe('alertLists');
