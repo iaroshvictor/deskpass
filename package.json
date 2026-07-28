@@ -29,6 +29,7 @@
     "dayjs": "^1.11.20",
     "meteor-node-stubs": "^1.2.12",
     "moment": "^2.30.1",
+    "node-datachannel": "^0.32.3",
     "node-onvif-ts": "^0.1.7",
     "node-signalr": "^3.1.0",
     "node-telegram-bot-api": "^0.63.0",
@@ -40,7 +41,8 @@
     "react-rnd": "^10.5.3",
     "redis": "^5.11.0",
     "rsuite": "^6.1.2",
-    "rtsp-ffmpeg": "^0.0.19"
+    "rtsp-ffmpeg": "^0.0.19",
+    "werift": "^0.23.0"
   },
   "devDependencies": {
     "@meteorjs/rspack": "^1.0.0",

@@ -39,29 +39,6 @@ export const getConfig = (): AppConfig => {
 };
 
 /**
- * Get the stream server URL based on environment
- * @param camId - Camera ID
- * @returns Stream server URL
- */
-export const getStreamServerUrl = (camId: string): string => {
-  const config = getConfig();
-
-  // Development mode: use configured dev server
-  if (config.isDevelopment && config.devServerHost && config.devServerPort) {
-    return `http://${config.devServerHost}:${config.devServerPort}/${camId}`;
-  }
-
-  // Production mode: use old code (dynamic host from window.location)
-  if (typeof window !== 'undefined') {
-    const host = window.location.origin.split(':')[1].split('//')[1];
-    return `http://${host}:8889/${camId}`;
-  }
-
-  // Fallback
-  return `http://localhost:8889/${camId}`;
-};
-
-/**
  * Check if running in development mode
  */
 export const isDevelopment = (): boolean => {

@@ -19,7 +19,7 @@ import { MetrixMethods } from '/imports/applications/metrix';
 import { WorkspacesCollection, App } from '/imports/api/workspace';
 import { GatesCollection, Gate } from '/imports/api/gates';
 import { AlertLists } from '/imports/api/alertLists';
-import {spawn, exec} from 'child_process';
+import {spawn} from 'child_process';
 import {AlertsArchiveCollection, } from '/imports/api/alertsArchive';
 import { AccessReportCollection, AccessReport } from '/imports/api/accessReport';
 import {IntruderAlertsCollection} from '/imports/api/intruderAlerts';
@@ -35,6 +35,13 @@ import { ApolloStatusType } from '/imports/api/apolloStatus';
 import { RecordingsCollection } from '/imports/api/recordings';
 import { initDvr } from './dvrManager';
 import './dvrFileServer';
+import './webrtcRelay';
+import { CamEventsCollection, CamLiveStatusCollection } from '/imports/api/camEvents';
+import { ScenariosCollection, ScenarioEventsCollection } from '/imports/api/scenarios';
+import { initScenarioEngine } from './scenarioEngine';
+import { ScenariosV2Collection, ScenarioEventsV2Collection } from '/imports/api/scenarioModel';
+import { initScenarioEngineV2 } from './scenarioEngineV2';
+import { perceptAdd, perceptRemove, perceptSync } from './perceptControl';
 let tgBot :TelegramBot | undefined = undefined;
 let ApolloApi : any | undefined = undefined;
 
@@ -58,8 +65,9 @@ interface CamWithCounter extends Cam{
   state:'success' | 'warning' | "danger"
 }
 const myCams:{[x:string]:CamWithCounter} ={}
-const StreamHandler:{[x:string]:any} = {}
 const ASPHandler:{[x:string]:any} ={}
+// ASP (Apollo access-control) integration dir — overridable for deployment.
+const ASP_DIR = process.env.ASP_DIR || '/opt/asp'
 const GatesMap : {[x:string]:Gate}= {}
 type cardReadMessage={
   source:string;
@@ -77,7 +85,6 @@ const KnownPersons:{[x:string]:any} ={}
 import redisClient from './redisclient';
 Meteor.startup(async () => {
 
-  exec('pkill -f cmps_cam')
   initDvr();
   const tgSetting = (await SettingsCollection.findOneAsync({type:'telegram'}))?.config as string;
   if(tgSetting){
@@ -514,38 +521,6 @@ Meteor.startup(async () => {
     }
   };
 
-  const startStreamHandler = (id:string, streamurl:string, disableSpoofFilter:boolean = false, lines:any[] = [], zones:any[] = []) => {
-    // Skip stream handler in development mode
-    if (isDevelopmentMode) {
-      console.log(`[DEV] Skipping stream handler for camera ${id}`);
-      return;
-    }
-
-    try{
-      console.log(`Starting stream handler for camera ${id} with URL ${streamurl}, disableSpoofFilter ${disableSpoofFilter}`);
-      if(StreamHandler[id]) {
-        StreamHandler[id].kill();
-        delete StreamHandler[id];
-      }
-      StreamHandler[id]=spawn(`python3`, [ '/home/devel/deskpass_cam/cmps_cam.py','--id', id, '--stream', streamurl, '--zones', JSON.stringify(zones), '--lines', JSON.stringify(lines)], {
-        cwd: '/home/devel/deskpass_cam'
-      })
-      StreamHandler[id].on('stdout', (_data:Buffer)=>{
-        //console.log('stdout', data.toString())
-      })
-      StreamHandler[id].on('stderr', (_data:Buffer)=>{
-        //console.error('stderr', data.toString())
-      })
-      StreamHandler[id].on('error', (_err:Error)=>{
-        //console.error('error', err.message)
-      })
-      StreamHandler[id].on('close', ()=>{
-        startStreamHandler(id, streamurl, disableSpoofFilter, lines, zones);
-      })
-      StreamHandler[id].stdout.pipe(process.stdout)
-      StreamHandler[id].stderr.pipe(process.stderr)
-    } catch (error) {}
-  }
   const startAspHandler = (id:string, ip:string) => {
     try{
       if(ASPHandler[id]) {
@@ -553,8 +528,8 @@ Meteor.startup(async () => {
         delete ASPHandler[id];
       }
 
-      ASPHandler[id]=spawn(`python3`, [ '/opt/asp/controller-workflow.py','--id', id,'--ip', ip], {
-        cwd: '/opt/asp'
+      ASPHandler[id]=spawn(`python3`, [ `${ASP_DIR}/controller-workflow.py`,'--id', id,'--ip', ip], {
+        cwd: ASP_DIR
       })
       ASPHandler[id].on('stdout', (data:Buffer)=>{
         console.log('stdout', data.toString())
@@ -570,30 +545,24 @@ Meteor.startup(async () => {
       })
     } catch (error) {}
   }
+  // All cameras run on the unified C++ perception engine (deskpass_percept).
   CamsCollection.find({}).observeChanges({
     added: async (id, fields) => {
       myCams[id]={_id:id, ...fields, count:0, state:'success'} as CamWithCounter
-      if(fields.streamurl)
-        startStreamHandler(id, fields.streamurl, fields.disableSpoofFilter || false, fields.lines || [], fields.overlayZones || []);
+      if(fields.streamurl) await perceptAdd({_id:id, ...fields} as Cam);
     },
     changed: async(id, fields)=>{
       const allfields = await CamsCollection.findOneAsync({_id:id});
       if(allfields)
         myCams[id]={...allfields, count:0, state:'success'}
-      if(fields.streamurl || fields.disableSpoofFilter || fields.lines || fields.overlayZones){
-        if(allfields){
-          StreamHandler[id].kill();
-          delete StreamHandler[id];
-          startStreamHandler(id, allfields.streamurl, allfields.disableSpoofFilter || false, allfields.lines || [], allfields.overlayZones || []);
-        }
+      if(fields.streamurl || fields.lines || fields.overlayZones){
+        if(allfields?.streamurl) await perceptSync(allfields);
       }
     },
     removed: async (id)=>{
-      if(StreamHandler[id]) {
-        delete myCams[id]
-        StreamHandler[id].kill();
-        delete StreamHandler[id];
-      }
+      const url = myCams[id]?.streamurl;   // capture before delete — remove needs the url
+      delete myCams[id]
+      await perceptRemove(id, url);
     }
   })
   ControllersCollection.find({manufacturer:'Apollo security'}).observeChanges({
@@ -609,7 +578,7 @@ Meteor.startup(async () => {
       }
     },
     removed: async (id)=>{
-      if(StreamHandler[id]) {
+      if(ASPHandler[id]) {
         ASPHandler[id].kill();
         delete ASPHandler[id];
       }
@@ -705,6 +674,14 @@ VisitsSummaryCollection.rawCollection().createIndex({ 'source': 1, 'timestamp': 
   AlertsArchiveCollection.rawCollection().createIndex({ idInfo: 1 });
   AlertsArchiveCollection.rawCollection().createIndex({ source: 1});
   AlertsArchiveCollection.rawCollection().createIndex({ source: 1, idInfo:1, timestamp:1 });
+  CamEventsCollection.rawCollection().createIndex({ timestamp: 1 });
+  CamEventsCollection.rawCollection().createIndex({ source: 1, timestamp: -1 });
+  ScenarioEventsCollection.rawCollection().createIndex({ triggeredAt: -1 });
+  ScenarioEventsCollection.rawCollection().createIndex({ seen: 1 });
+  ScenarioEventsCollection.rawCollection().createIndex({ scenarioId: 1, triggeredAt: -1 });
+  ScenarioEventsV2Collection.rawCollection().createIndex({ triggeredAt: -1 });
+  ScenarioEventsV2Collection.rawCollection().createIndex({ seen: 1 });
+  ScenarioEventsV2Collection.rawCollection().createIndex({ scenarioId: 1, triggeredAt: -1 });
   TemporaryCardsCollection.rawCollection().createIndex({ status: 1 });
   TemporaryCardsCollection.rawCollection().createIndex({ personId: 1 });
   TemporaryCardsCollection.rawCollection().createIndex({ attachedAt: 1 });
@@ -812,6 +789,35 @@ VisitsSummaryCollection.rawCollection().createIndex({ 'source': 1, 'timestamp': 
       }
     }
   };
+  // perception-engine events: line crossings (persisted) + 1 Hz live status (upserted)
+  const cam_events_listener = async (message: string, channel: string) => {
+    if (channel !== 'cam_events') return;
+    try {
+      const ev = JSON.parse(message);
+      if (ev.type === 'crossing') {
+        await CamEventsCollection.insertAsync({
+          source: ev.source, tid: ev.tid, line: ev.line, to: ev.to,
+          timestamp: new Date(),
+        });
+      } else if (ev.type === 'status') {
+        await CamLiveStatusCollection.upsertAsync(
+          { _id: ev.source },
+          { $set: {
+              fps:        ev.fps,
+              persons:    ev.persons,
+              faces:      ev.faces,
+              lineCounts: ev.analytics?.line_counts ?? {},
+              zoneCounts: ev.analytics?.zone_counts ?? {},
+              zoneMotion: ev.analytics?.zone_motion ?? {},
+              updatedAt:  new Date(),
+          }},
+        );
+      }
+    } catch (e) {
+      console.log('cam_events parse error', e);
+    }
+  };
+
   const cams_listener = async(_message:string, channel:string) => {
     if(channel === 'get_cams'){
       
@@ -828,6 +834,10 @@ VisitsSummaryCollection.rawCollection().createIndex({ 'source': 1, 'timestamp': 
   await redisClient.subscribe('new_detection', listener);
   await redisClient.subscribe('card_read', listener);
   await redisClient.subscribe('get_cams', cams_listener);
+  await redisClient.subscribe('cam_events', cam_events_listener);
+
+  initScenarioEngine().catch((e) => console.error('[scenario] engine failed to start:', e));
+  initScenarioEngineV2().catch((e) => console.error('[scenario2] engine failed to start:', e));
 
   let localOnvif:OnvifDevice[] = []
   if(await Meteor.users.find().countAsync() === 0 ){
@@ -879,6 +889,66 @@ VisitsSummaryCollection.rawCollection().createIndex({ 'source': 1, 'timestamp': 
   });
   Meteor.publish("cam_zone_defs", function () {
     return CamZoneDefsCollection.find();
+  });
+  Meteor.publish("cam_events", function (source?: string, limit: number = 50) {
+    return CamEventsCollection.find(
+      source ? { source } : {},
+      { sort: { timestamp: -1 }, limit });
+  });
+  Meteor.publish("cam_live_status", function () {
+    return CamLiveStatusCollection.find();
+  });
+
+  // Per-frame overlay data for the annotated livestream. Polls the redis
+  // cam:frames:<id> tail at ~10fps and pushes LIGHT metadata (boxes, faces,
+  // landmarks, pose, colors, face thumbnails) to the client as a single
+  // reactive doc — no Mongo, heavy fields (embeddings, person crops) stripped.
+  Meteor.publish("cam_overlay", function (camId: string) {
+    if (typeof camId !== 'string') { this.ready(); return; }
+    const self: any = this;
+    let lastFrame = -1;
+    self.added("cam_overlay", camId, { persons: [], faces: [], fps: 0 });
+    self.ready();
+    const timer = Meteor.setInterval(async () => {
+      try {
+        const raw = await pub.lIndex(`cam:frames:${camId}`, -1);
+        if (!raw) return;
+        const d = JSON.parse(raw);
+        if (d.frame === lastFrame) return;
+        lastFrame = d.frame;
+        self.changed("cam_overlay", camId, {
+          frame: d.frame,
+          fps: d.fps,
+          persons: (d.persons || []).map((p: any) => ({
+            tid: p.tid, bbox: p.bbox, known: !!p.has_emb,
+            hc: p.head_color, uc: p.upper_color, lc: p.lower_color,
+            pose: p.pose,
+          })),
+          faces: (d.faces || []).map((f: any) => ({
+            bbox: f.bbox, lm5: f.lm5, frontal: f.frontal, thumb: f.face_crop,
+          })),
+        });
+      } catch { /* transient */ }
+    }, 100);
+    self.onStop(() => Meteor.clearInterval(timer));
+  });
+  Meteor.publish("scenarios", function () {
+    return ScenariosCollection.find();
+  });
+  Meteor.publish("scenario_events", function (filter: any = {}, limit: number = 100) {
+    return ScenarioEventsCollection.find(filter, { sort: { triggeredAt: -1 }, limit });
+  });
+  Meteor.publish("scenario_events_unseen", function () {
+    return ScenarioEventsCollection.find({ seen: false }, { sort: { triggeredAt: -1 }, limit: 200 });
+  });
+  Meteor.publish("scenarios_v2", function () {
+    return ScenariosV2Collection.find();
+  });
+  Meteor.publish("scenario_events_v2", function (filter: any = {}, limit: number = 100, skip: number = 0, sort: any = { triggeredAt: -1 }) {
+    return ScenarioEventsV2Collection.find(filter, { sort, limit, skip });
+  });
+  Meteor.publish("scenario_events_v2_unseen", function () {
+    return ScenarioEventsV2Collection.find({ seen: false }, { sort: { triggeredAt: -1 }, limit: 200 });
   });
   Meteor.publish("alertsArchive", function (filter, limit = 100, skip = 0, sort = {timestamp:-1}) {
     return AlertsArchiveCollection.find(filter, { limit, skip, sort });
@@ -1065,13 +1135,9 @@ VisitsSummaryCollection.rawCollection().createIndex({ 'source': 1, 'timestamp': 
   Meteor.methods({
     async restartCamHandler(id:string){
       const cam = await CamsCollection.findOneAsync({_id:id});
-      if(cam && cam._id){
-        if(StreamHandler[cam._id]) {
-          StreamHandler[cam._id].kill();
-          //just killing the process is enough, it will self start
-          // delete StreamHandler[cam._id];
-        }
-        // startStreamHandler(cam._id, cam.streamurl, cam.y_line || 0, cam.disableSpoofFilter || false);
+      if(cam && cam._id && cam.streamurl){
+        // restart = re-sync the camera's source on the perception engine
+        await perceptSync(cam as Cam);
       }
       return true;
     },

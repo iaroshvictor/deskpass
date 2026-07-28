@@ -2,11 +2,121 @@ import React from 'react';
 import Icon from './icon';
 import {AppType} from '../..';
 import { useFind, useSubscribe } from 'meteor/react-meteor-data';
-import { Stack, Typography, Paper, Box, IconButton, Snackbar } from '@mui/material';
+import { Stack, Typography, Paper, Box, IconButton, Snackbar, Chip, Button } from '@mui/material';
 import { Cam, CamsCollection } from '/imports/api/cams';
+import { CamEventsCollection, CamLiveStatusCollection } from '/imports/api/camEvents';
 import { Meteor } from 'meteor/meteor';
-import { getStreamServerUrl } from '/imports/config/env';
+import { Mongo } from 'meteor/mongo';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
+
+// Client-only collection fed by the 'cam_overlay' publication (server/main.ts).
+const CamOverlayCollection = new Mongo.Collection<any>('cam_overlay');
+
+// OpenPose skeleton edges (0-indexed), matching the engine's pose output.
+const POSE_EDGES: [number, number][] = [
+  [1,8],[8,9],[9,10],[1,11],[11,12],[12,13],[1,2],[2,3],[3,4],[2,16],
+  [1,5],[5,6],[6,7],[5,17],[1,0],[0,14],[0,15],[14,16],[15,17],
+];
+const MUX_W = 1920, MUX_H = 1080;   // metadata coordinate space
+
+// Canvas overlay: boxes, faces+landmarks, pose, zones, lines drawn over the
+// WebRTC video from the cam_overlay metadata (normalized to MUX_W×MUX_H).
+const AnnotatedOverlay = ({ cam, showOverlay }: { cam: Cam, showOverlay: boolean }) => {
+  useSubscribe('cam_overlay', cam._id);
+  const ov = useFind(() => CamOverlayCollection.find({ _id: cam._id }))[0];
+  const canvasRef = React.useRef<HTMLCanvasElement>(null);
+
+  React.useEffect(() => {
+    const cv = canvasRef.current;
+    if (!cv) return;
+    const ctx = cv.getContext('2d');
+    if (!ctx) return;
+    const W = cv.clientWidth, H = cv.clientHeight;
+    if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
+    ctx.clearRect(0, 0, W, H);
+    if (!showOverlay) return;
+    const sx = (x: number) => x / MUX_W * W, sy = (y: number) => y / MUX_H * H;
+
+    // zones (from cam definition)
+    for (const z of cam.overlayZones || []) {
+      if (!z.points?.length) continue;
+      ctx.beginPath();
+      z.points.forEach((p, i) => { const X = p[0]*W, Y = p[1]*H; i ? ctx.lineTo(X,Y) : ctx.moveTo(X,Y); });
+      ctx.closePath();
+      ctx.strokeStyle = z.borderColor || '#44AAFF'; ctx.lineWidth = 2; ctx.stroke();
+      if (z.zoneMarking) { ctx.fillStyle = (z.borderColor || '#44AAFF') + '22'; ctx.fill(); }
+    }
+    // lines (tripwires)
+    for (const l of cam.lines || []) {
+      let x1,y1,x2,y2;
+      if (l.orientation === 'v') { x1=(l.top??.5)*W; y1=0; x2=(l.bottom??.5)*W; y2=H; }
+      else { x1=0; y1=(l.left??.5)*H; x2=W; y2=(l.right??.5)*H; }
+      ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2);
+      ctx.strokeStyle = l.lineColor || '#FF4444'; ctx.lineWidth = 3; ctx.stroke();
+    }
+    if (!ov) return;
+    // person boxes + label + pose
+    for (const p of ov.persons || []) {
+      const [x1,y1,x2,y2] = p.bbox;
+      ctx.strokeStyle = p.known ? '#39FF14' : '#2196f3'; ctx.lineWidth = 2;
+      ctx.strokeRect(sx(x1), sy(y1), sx(x2-x1), sy(y2-y1));
+      const label = `P#${p.tid}` + (p.uc ? ` · ${p.uc}` : '');
+      ctx.font = '12px sans-serif';
+      const tw = ctx.measureText(label).width;
+      ctx.fillStyle = p.known ? 'rgba(57,255,20,.8)' : 'rgba(33,150,243,.8)';
+      ctx.fillRect(sx(x1), sy(y1) - 15, tw + 6, 15);
+      ctx.fillStyle = '#000'; ctx.fillText(label, sx(x1) + 3, sy(y1) - 4);
+      if (p.pose) {
+        ctx.strokeStyle = '#ff00ff'; ctx.lineWidth = 2;
+        for (const [a,b] of POSE_EDGES) {
+          const ja = p.pose[a], jb = p.pose[b];
+          if (ja && jb) { ctx.beginPath(); ctx.moveTo(sx(ja[0]),sy(ja[1])); ctx.lineTo(sx(jb[0]),sy(jb[1])); ctx.stroke(); }
+        }
+        ctx.fillStyle = '#00ffff';
+        for (const j of p.pose) if (j) { ctx.beginPath(); ctx.arc(sx(j[0]),sy(j[1]),3,0,7); ctx.fill(); }
+      }
+    }
+    // face boxes + landmarks
+    for (const f of ov.faces || []) {
+      const [x1,y1,x2,y2] = f.bbox;
+      ctx.strokeStyle = f.frontal ? '#FFD700' : 'rgba(255,215,0,.5)'; ctx.lineWidth = 1.5;
+      ctx.strokeRect(sx(x1), sy(y1), sx(x2-x1), sy(y2-y1));
+      if (f.lm5) { ctx.fillStyle = '#00ffff'; for (const pt of f.lm5) { ctx.beginPath(); ctx.arc(sx(pt[0]),sy(pt[1]),2,0,7); ctx.fill(); } }
+    }
+  }, [ov, showOverlay, cam.overlayZones, cam.lines]);
+
+  return <canvas ref={canvasRef} style={{ position:'absolute', top:0, left:0, width:'100%', height:'100%', pointerEvents:'none' }} />;
+};
+
+// Right-side sidebar: live stats + recent face thumbnails (the annotated-stream look).
+const OverlaySidebar = ({ cam }: { cam: Cam }) => {
+  const ov = useFind(() => CamOverlayCollection.find({ _id: cam._id }))[0];
+  const status = useFind(() => CamLiveStatusCollection.find({ _id: cam._id }))[0];
+  const thumbs = React.useRef<string[]>([]);
+  const faces = ov?.faces?.filter((f: any) => f.thumb) || [];
+  if (faces.length) { thumbs.current = [...faces.map((f: any) => f.thumb), ...thumbs.current].slice(0, 6); }
+  return (
+    <Box sx={{
+      position:'absolute', top:0, right:0, height:'100%', width:120,
+      background:'rgba(12,12,12,.72)', color:'#fff', p:0.5, pointerEvents:'none',
+      display:'flex', flexDirection:'column', gap:0.5,
+    }}>
+      <Typography sx={{ fontSize:10, color:'#8ab4ff' }}>PERSONS</Typography>
+      <Typography sx={{ fontSize:26, fontWeight:700, lineHeight:1 }}>{status?.persons ?? ov?.persons?.length ?? '—'}</Typography>
+      <Typography sx={{ fontSize:10, color:'#7CFC00' }}>FPS</Typography>
+      <Typography sx={{ fontSize:16 }}>{(ov?.fps ?? status?.fps ?? 0).toFixed(1)}</Typography>
+      <Typography sx={{ fontSize:10, color:'#FFD700' }}>FACES</Typography>
+      <Typography sx={{ fontSize:16 }}>{status?.faces ?? ov?.faces?.length ?? 0}</Typography>
+      <Box sx={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:0.3, mt:0.5 }}>
+        {thumbs.current.map((t, i) => (
+          <img key={i} src={`data:image/jpeg;base64,${t}`} style={{ width:'100%', borderRadius:2 }} />
+        ))}
+      </Box>
+    </Box>
+  );
+};
+import FullscreenIcon from '@mui/icons-material/Fullscreen';
+import FullscreenExitIcon from '@mui/icons-material/FullscreenExit';
 
 // const useProxiedWHEP = (streamPath: string, videoRef: React.RefObject<HTMLVideoElement>) => {
 //     useEffect(() => {
@@ -125,6 +235,114 @@ import RestartAltIcon from '@mui/icons-material/RestartAlt';
 //     }, [streamPath, videoRef]);
 // };
 
+// WebRTC livestream: SDP offer/answer over DDP ('webrtcOffer' method, see
+// server/webrtcRelay.ts), media over a normal RTCPeerConnection.  The server
+// forwards the cam process's H.264 RTP untouched — no transcoding anywhere.
+const useWebRtcLive = (
+    camId: string,
+    videoRef: React.RefObject<HTMLVideoElement>,
+    epoch: number,
+    onState: (s: 'connecting' | 'live' | 'error') => void,
+) => {
+    React.useEffect(() => {
+        if (!camId) return;
+        let pc: RTCPeerConnection | null = null;
+        let retry: ReturnType<typeof setTimeout> | null = null;
+        let disposed = false;
+
+        const start = async () => {
+            if (disposed) return;
+            onState('connecting');
+            pc = new RTCPeerConnection();
+            pc.addTransceiver('video', { direction: 'recvonly' });
+            pc.ontrack = (evt) => {
+                if (videoRef.current) videoRef.current.srcObject = evt.streams[0];
+            };
+            pc.onconnectionstatechange = () => {
+                if (!pc || disposed) return;
+                if (pc.connectionState === 'connected') onState('live');
+                if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+                    onState('error');
+                    pc.close(); pc = null;
+                    retry = setTimeout(start, 3000);
+                }
+            };
+
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            // non-trickle: wait for ICE gathering so the offer carries candidates
+            await new Promise<void>((resolve) => {
+                if (pc!.iceGatheringState === 'complete') return resolve();
+                const timer = setTimeout(resolve, 2000);
+                pc!.onicegatheringstatechange = () => {
+                    if (pc?.iceGatheringState === 'complete') { clearTimeout(timer); resolve(); }
+                };
+            });
+
+            try {
+                const answerSdp: string = await Meteor.callAsync(
+                    'webrtcOffer', camId, pc!.localDescription!.sdp);
+                if (disposed || !pc) return;
+                await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
+            } catch (e) {
+                console.error('webrtcOffer failed:', e);
+                onState('error');
+                pc?.close(); pc = null;
+                retry = setTimeout(start, 5000);
+            }
+        };
+        start();
+        return () => {
+            disposed = true;
+            if (retry) clearTimeout(retry);
+            pc?.close();
+        };
+    }, [camId, epoch]);
+};
+
+// Live status chips + recent line-crossing events for one cam.
+// Data arrives from the perception engine via redis 'cam_events' → CamLiveStatus / CamEvents.
+const CamLiveInfo = ({ cam }: { cam: Cam }) => {
+    useSubscribe('cam_live_status');
+    useSubscribe('cam_events', cam._id || '', 10);
+    const status = useFind(() => CamLiveStatusCollection.find({ _id: cam._id }))[0];
+    const events = useFind(() => CamEventsCollection.find(
+        { source: cam._id }, { sort: { timestamp: -1 }, limit: 10 }));
+
+    const lineLabel = (lineId: string) =>
+        cam.lines?.find(l => l.lineId === lineId)?.label || lineId;
+    const zoneLabel = (zoneId: string) =>
+        cam.overlayZones?.find(z => z.zoneId === zoneId)?.label || zoneId;
+
+    return (
+        <Box sx={{ p: 0.5 }}>
+            <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5 }}>
+                <Chip size="small" label={`${status?.fps?.toFixed(1) ?? '—'} fps`} />
+                <Chip size="small" color={status?.persons ? 'primary' : 'default'}
+                      label={`persons ${status?.persons ?? '—'}`} />
+                {Object.entries(status?.zoneCounts ?? {}).map(([zid, cnt]) => (
+                    <Chip key={zid} size="small"
+                          color={cnt > 0 ? 'warning' : 'default'}
+                          label={`${zoneLabel(zid)}: ${cnt}`} />
+                ))}
+                {Object.entries(status?.zoneMotion ?? {}).map(([zid, score]) => (
+                    <Chip key={`m-${zid}`} size="small" variant="outlined"
+                          label={`${zoneLabel(zid)} motion ${score.toFixed(1)}`} />
+                ))}
+            </Stack>
+            {events.length > 0 && (
+                <Box sx={{ mt: 0.5, maxHeight: 96, overflowY: 'auto' }}>
+                    {events.map(ev => (
+                        <Typography key={ev._id} variant="caption" component="div" sx={{ color: 'text.secondary' }}>
+                            {ev.timestamp.toLocaleTimeString()} — P#{ev.tid} crossed «{lineLabel(ev.line)}» → {ev.to}
+                        </Typography>
+                    ))}
+                </Box>
+            )}
+        </Box>
+    );
+};
+
 export const LiveCamPlayer = ({ cam, sx={} }: { cam: Cam, sx?:{[x:string]:any} }) => {
     // const videoRef = useRef<HTMLVideoElement>(null);
     // useProxiedWHEP(cam._id ||'', videoRef);
@@ -140,6 +358,25 @@ export const LiveCamPlayer = ({ cam, sx={} }: { cam: Cam, sx?:{[x:string]:any} }
     //     );
     // }, [cam.streamurl]);
     const [message, setMessage] = React.useState<string | null>(null)
+    const [streamEpoch, setStreamEpoch] = React.useState(0)   // bump to force stream reconnect
+    const [streamState, setStreamState] = React.useState<'connecting' | 'live' | 'error'>('connecting')
+    const videoRef = React.useRef<HTMLVideoElement>(null)
+    const videoBoxRef = React.useRef<HTMLDivElement>(null)
+    const [isFullscreen, setIsFullscreen] = React.useState(false)
+    const [showOverlay, setShowOverlay] = React.useState(true)
+    useWebRtcLive(cam._id || '', videoRef, streamEpoch, setStreamState)
+    React.useEffect(() => {
+        const onChange = () => setIsFullscreen(document.fullscreenElement === videoBoxRef.current)
+        document.addEventListener('fullscreenchange', onChange)
+        return () => document.removeEventListener('fullscreenchange', onChange)
+    }, [])
+    const toggleFullscreen = () => {
+        if (document.fullscreenElement) {
+            document.exitFullscreen().catch(() => {})
+        } else {
+            videoBoxRef.current?.requestFullscreen().catch(() => {})
+        }
+    }
     return (
         <Paper key={cam._id} sx={{ p: 1, minWidth: 320, ...sx, position:'relative' }}>
             <Typography variant='subtitle2' sx={{backgroundColor:'#3d3d3d', color:'#fff', textAlign:'center', p:1}} >{cam.name}</Typography>
@@ -164,26 +401,58 @@ export const LiveCamPlayer = ({ cam, sx={} }: { cam: Cam, sx?:{[x:string]:any} }
                 poster={`data:image/jpeg;base64,${camPoster}` || 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8//8/AwAI/wH+9Q4AAAAASUVORK5CYII='}
                 style={{ width: '100%', background: '#000' }}
             /> */}
-            <Box sx={{
+            <Box ref={videoBoxRef} sx={{
                 position: 'relative',
                 width: '100%',
-                paddingTop: '56.25%', // 16:9 aspect ratio
+                paddingTop: '49.63%', // DS output is 2176×1080 (video + sidebar)
                 overflow: 'hidden',
+                backgroundColor: '#000',
             }}>
-            <iframe
-                title={cam.name}
-                src={getStreamServerUrl(cam._id || '')}
+            {/* processed DeepStream output via WebRTC (server/webrtcRelay.ts) */}
+            <video
+                ref={videoRef}
+                autoPlay
+                playsInline
+                muted
                 style={{
                     position: 'absolute',
                     top: 0,
                     left: 0,
                     width: '100%',
                     height: '100%',
-                    border: 'none',
+                    objectFit: 'contain',
                 }}
-                allowFullScreen
                 />
+            {/* annotation overlay (boxes/faces/pose/zones/lines) + sidebar */}
+            <AnnotatedOverlay cam={cam} showOverlay={showOverlay} />
+            {showOverlay && <OverlaySidebar cam={cam} />}
+            {streamState !== 'live' && (
+                <Typography variant="caption" sx={{
+                    position: 'absolute', top: '50%', left: '50%',
+                    transform: 'translate(-50%,-50%)', color: '#888',
+                }} onClick={() => setStreamEpoch(e => e + 1)}>
+                    {streamState === 'connecting' ? 'connecting…' : 'stream unavailable — click to retry'}
+                </Typography>
+            )}
+            <Button size="small" onClick={() => setShowOverlay(v => !v)}
+                sx={{ position:'absolute', bottom:4, left:4, minWidth:0, px:1,
+                      color:'#fff', backgroundColor:'rgba(0,0,0,.45)', fontSize:10,
+                      '&:hover':{ backgroundColor:'rgba(0,0,0,.7)' } }}>
+                {showOverlay ? 'overlay ✓' : 'overlay'}
+            </Button>
+            <IconButton
+                onClick={toggleFullscreen}
+                size="small"
+                sx={{
+                    position: 'absolute', bottom: 4, right: 4,
+                    color: '#fff', backgroundColor: 'rgba(0,0,0,0.45)',
+                    '&:hover': { backgroundColor: 'rgba(0,0,0,0.7)' },
+                }}
+            >
+                {isFullscreen ? <FullscreenExitIcon /> : <FullscreenIcon />}
+            </IconButton>
             </Box>
+            <CamLiveInfo cam={cam} />
              <Snackbar
                 open={!!message}
                 autoHideDuration={3000}

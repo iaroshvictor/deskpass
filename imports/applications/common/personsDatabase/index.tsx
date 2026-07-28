@@ -12,6 +12,8 @@ import{
     TextField,
     Box,
     Chip,
+    Divider,
+    Grid,
     Pagination,
     LinearProgress,
     Tabs,
@@ -27,23 +29,40 @@ import{
     Button,
     ButtonGroup,
     Tooltip,
+    IconButton,
 } from '@mui/material';
+import FilterListIcon from '@mui/icons-material/FilterList';
 
-const PAR_ATTRS = [
-    'hat','glasses','short_sleeve','long_sleeve','upper_stride',
-    'upper_logo','upper_plaid','upper_splice','lower_stripe',
-    'lower_pattern','long_coat','trousers','shorts','skirt_dress',
-    'boots','handbag','shoulder_bag','backpack','holds_object',
-    'age_over_60','age_18_60','age_under_18','female',
-    'facing_front','facing_side','facing_back',
-] as const;
 
 const PAR_COLOR_KEYS = ['head_color','upper_color','lower_color'] as const;
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
 import { DateTimePicker } from '@mui/x-date-pickers/DateTimePicker';
 import { VisitSummary, VisitsSummaryCollection } from '/imports/api/visitSummary';
-import { parToChips } from '/imports/applications/personAlert/alertsArchive/itemModal';
+import { parToChips, AlertRecordingPlayer } from '/imports/applications/personAlert/alertsArchive/itemModal';
+import ParRepresentation from '/imports/applications/common/ParRepresentation';
+import ParFilterBuilder, { countActiveParFilters, ParFilterState } from '/imports/applications/common/ParRepresentation/ParFilterBuilder';
+import { AlertLists } from '/imports/api/alertLists';
+
+const aggregatePar = (visits: Visit[]): Record<string, number | string> | null => {
+    const withPar = visits.filter(v => v.par && Object.keys(v.par).length > 0);
+    if (withPar.length === 0) return null;
+    const result: Record<string, number | string> = {};
+    const numericKeys = new Set<string>();
+    withPar.forEach(v => Object.keys(v.par!).forEach(k => { if (typeof v.par![k] === 'number') numericKeys.add(k); }));
+    numericKeys.forEach(k => {
+        const vals = withPar.filter(v => typeof v.par![k] === 'number').map(v => v.par![k] as number);
+        result[k] = vals.reduce((a, b) => a + b, 0) / vals.length;
+    });
+    PAR_COLOR_KEYS.forEach(k => {
+        const colors = withPar.filter(v => v.par && typeof v.par[k] === 'string').map(v => v.par![k] as string);
+        if (colors.length > 0) {
+            const freq = colors.reduce((acc, c) => ({ ...acc, [c]: (acc[c] || 0) + 1 }), {} as Record<string, number>);
+            result[k] = Object.entries(freq).sort(([,a],[,b]) => b - a)[0][0];
+        }
+    });
+    return Object.keys(result).length ? result : null;
+};
 import { useFind, useSubscribe } from 'meteor/react-meteor-data';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import DeleteSweepOutlinedIcon from '@mui/icons-material/DeleteSweepOutlined';
@@ -56,7 +75,7 @@ import DialogContent from '@mui/material/DialogContent';
 import DialogTitle from '@mui/material/DialogTitle';
 import Slide from '@mui/material/Slide';
 import { TransitionProps } from '@mui/material/transitions';
-import { VisitsCollection } from '/imports/api/visits';
+import { Visit, VisitsCollection } from '/imports/api/visits';
 import IdentifyEdit from './indetifyEditForm';
 const Transition = React.forwardRef(function Transition(
   props: TransitionProps & {
@@ -118,7 +137,12 @@ const ParBadge = ({par}: {par?: Record<string, number | string>}) => {
 const ItemDetailedRender = ({visit, cams, setMessage, setSelectedItemDialog}:{visit:VisitSummary, onClose:()=>void, cams:Cam[], setMessage:(messgae:string)=>void, setSelectedItemDialog:(param :VisitSummary | null)=>void}) => {
     const [idForm, setIdForm] = useState<boolean>(false)
     useSubscribe('visits', {tracking_id: visit._id}, 0, 0, {timestamp:-1});
+    useSubscribe('alertLists');
     const visits = VisitsCollection.find({tracking_id: visit._id}, {sort: {timestamp: -1}}).fetch();
+    const alertLists = AlertLists.find({}).fetch();
+    const alertList = visit.idInfo?.alertList ? alertLists.find(l => l._id === visit.idInfo!.alertList) : null;
+    const aggregatedPar = aggregatePar(visits);
+    const parWithData = visits.filter(v => v.par && Object.keys(v.par).length > 0).length;
     const getCamName = (camId: string) => {
         const cam = cams.find(c => c._id === camId);
         return cam ? cam.name : 'Unknown Camera';
@@ -210,36 +234,105 @@ return  idForm ?(
         onClose={() => setSelectedItemDialog(null)}
         aria-describedby="alert-dialog-slide-description"
     >
-        <DialogTitle>{"Photos"}</DialogTitle>
+        <DialogTitle>
+            {visit.idInfo?.firstName
+                ? <><EditIcon sx={{mr:1, verticalAlign:'middle'}}/>{visit.idInfo.firstName} {visit.idInfo.lastName}</>
+                : 'Photos'}
+        </DialogTitle>
         <DialogContent>
+            {/* ── Identity banner ─────────────────────────────────────── */}
+            {visit.idInfo?.firstName && (
+                <Paper variant="outlined" sx={{p:2, mb:2, borderLeft:'4px solid', borderColor:'secondary.main'}}>
+                    <Stack direction='row' spacing={2} alignItems='flex-start'>
+                        <img src={`data:image/jpeg;base64,${visit.face_b64}`} alt="Face"
+                            style={{width:60, height:60, objectFit:'cover', borderRadius:4}} />
+                        <Stack spacing={0.5} flexGrow={1}>
+                            <Typography variant="h6" lineHeight={1.2}>
+                                {visit.idInfo.firstName} {visit.idInfo.lastName}
+                            </Typography>
+                            {visit.idInfo.comment && (
+                                <Typography variant="body2" color="text.secondary">{visit.idInfo.comment}</Typography>
+                            )}
+                            <Stack direction='row' spacing={1} flexWrap='wrap'>
+                                {alertList && (
+                                    <Chip label={alertList.name} size="small" color="warning"
+                                        sx={{...(alertList.color ? {bgcolor: alertList.color, color:'#fff'} : {})}} />
+                                )}
+                                {visit.idInfo.divission && (
+                                    <Chip label={visit.idInfo.divission} size="small" variant="outlined" />
+                                )}
+                                {visit.idInfo.cA && (
+                                    <Chip label="Access Control" size="small" color="success" />
+                                )}
+                            </Stack>
+                        </Stack>
+                    </Stack>
+                </Paper>
+            )}
+
+            {/* ── Recording + PAR overview ─────────────────────────────── */}
+            <Grid container spacing={2} sx={{mb:2}}>
+                <Grid size={7}>
+                    <AlertRecordingPlayer camId={visit.source} timestamp={new Date(visit.timestamp)} />
+                </Grid>
+                <Grid size={5}>
+                    {aggregatedPar ? (
+                        <Stack spacing={1}>
+                            <Typography variant="caption" color="text.secondary" sx={{fontWeight:600}}>
+                                PAR OVERVIEW ({parWithData} / {visits.length} detections)
+                            </Typography>
+                            <ParRepresentation par={aggregatedPar} />
+                            <Stack direction='row' spacing={0.5} flexWrap='wrap' useFlexGap>
+                                {[...new Set(visits.map(v => v.source))].map(src => (
+                                    <Chip key={src} label={getCamName(src)} size="small" variant="outlined" />
+                                ))}
+                            </Stack>
+                            {visits.length > 0 && (
+                                <Typography variant="caption" color="text.secondary">
+                                    {new Date(visits[visits.length - 1].timestamp).toLocaleString()} → {new Date(visits[0].timestamp).toLocaleString()}
+                                </Typography>
+                            )}
+                        </Stack>
+                    ) : (
+                        <Typography variant="caption" color="text.secondary">No PAR data for these detections.</Typography>
+                    )}
+                </Grid>
+            </Grid>
+
+            <Divider sx={{mb:2}} />
+
+            {/* ── Action buttons ──────────────────────────────────────── */}
             <ButtonGroup sx={{mb:2}} variant="contained" aria-label="Actions">
                 <Button color='primary' onClick={handleClick}>{`Optimize ${visits.length} items`}</Button>
                 {selectedVisits.length > 0 && (
                     <Button color='error' onClick={handleDeleteClick}>{`Delete ${selectedVisits.length} items`}</Button>
                 )}
-                <Button color='success' onClick={handleIdClick}>{visit.idInfo?.firstName? <><EditIcon />{`${visit.idInfo.firstName} ${visit.idInfo.lastName}`}</>  :"Identify Person"}</Button>
+                <Button color='success' onClick={handleIdClick}>
+                    {visit.idInfo?.firstName ? <><EditIcon />{`${visit.idInfo.firstName} ${visit.idInfo.lastName}`}</> : 'Identify Person'}
+                </Button>
             </ButtonGroup>
-            <Stack  id='faceItems' spacing={1} direction='row' sx={{flexWrap:'wrap', gap:1, justifyContent:'space-between'}}>
-                {visits.slice(0, 100).map((visit) => (
+
+            {/* ── Face grid ───────────────────────────────────────────── */}
+            <Stack id='faceItems' spacing={1} direction='row' sx={{flexWrap:'wrap', gap:1, justifyContent:'space-between'}}>
+                {visits.slice(0, 100).map((v) => (
                     <Paper
-                        elevation={selectedVisits.includes(visit._id ||'')?20:3}
-                        sx={selectedVisits.includes(visit._id ||'')?{transform:'scale(.9)', p: 0, maxWidth: 80,cursor:'pointer', textAlign: 'center'}:{ p: 0, maxWidth: 80,cursor:'pointer', textAlign: 'center'}}
-                        key={visit._id}
-                        onClick={()=>{
-                            if(visit._id)
-                            setSelectedVisits(prev=>(
-                                prev.includes(visit._id || '')
-                                    ?prev.filter(item=> item!== visit._id)
-                                    :[...prev, visit._id || '']
+                        elevation={selectedVisits.includes(v._id || '') ? 20 : 3}
+                        sx={selectedVisits.includes(v._id || '')
+                            ? {transform:'scale(.9)', p:0, maxWidth:80, cursor:'pointer', textAlign:'center'}
+                            : {p:0, maxWidth:80, cursor:'pointer', textAlign:'center'}}
+                        key={v._id}
+                        onClick={() => {
+                            if (v._id)
+                                setSelectedVisits(prev =>
+                                    prev.includes(v._id || '')
+                                        ? prev.filter(item => item !== v._id)
+                                        : [...prev, v._id || '']
                                 )
-                            )
                         }}
                     >
-                        <Stack direction="column" spacing={0.5} sx={{width: '100%', textAlign: 'center' }} >
-                                <img src={`data:image/jpeg;base64,${visit.face_b64}`} alt="Face" style={{maxWidth:'100%'}} />
-                            <Typography sx={{overflow:'hidden', display:'-webkit-box', lineClamp:2, WebkitLineClamp:2,wordBreak:'break-all'}} variant="caption">{getCamName(visit.source)}</Typography>
-                            <Typography sx={{mt:0}} variant="body2">{visit.timestamp.toLocaleString()}</Typography>
-                            <ParBadge par={visit.par} />
+                        <Stack direction="column" spacing={0.5} sx={{width:'100%', textAlign:'center'}}>
+                            <img src={`data:image/jpeg;base64,${v.face_b64}`} alt="Face" style={{maxWidth:'100%'}} />
+                            <ParBadge par={v.par} />
                         </Stack>
                     </Paper>
                 ))}
@@ -256,16 +349,20 @@ const PersonsDatabaseRenderer= () =>{
     const [anchorEl, setAnchorEl] = React.useState<HTMLButtonElement | null>(null);
     const [selectedTab, setSelectedTab] = useState<'all' | 'selected'>('all');
     const [message, setMessage] = useState<string | null>(null);
-    const [filter, setFilter] =useState<Filter>({timestamp:{$gte:new Date()}})
-    const [parFilter, setParFilter] = useState<string[]>([]);
+    const [filter, setFilter] = useState<Filter>({});
+    const [parFilterState, setParFilterState] = useState<ParFilterState>({
+        gender: null, age: null, facing: null, upperType: null, lowerType: null,
+        headColor: null, upperColor: null, lowerColor: null, extras: [],
+    });
+    const [parAnchor, setParAnchor] = useState<HTMLButtonElement | null>(null);
 
-    const applyParFilter = (attrs: string[]) => {
-        setParFilter(attrs);
+    const handleParFilterChange = (conditions: Record<string, any>, state: ParFilterState) => {
+        setParFilterState(state);
         setFilter(prev => {
             const next: Filter = {};
             if (prev.source) next.source = prev.source;
             if (prev.timestamp) next.timestamp = prev.timestamp;
-            attrs.forEach(attr => { next[`par.${attr}`] = { $gte: 0.6 }; });
+            Object.assign(next, conditions);
             return next;
         });
     };
@@ -403,21 +500,22 @@ const PersonsDatabaseRenderer= () =>{
                         }
                     }} />
                 </LocalizationProvider>
-                <Autocomplete
-                    multiple
-                    disablePortal
-                    options={[...PAR_ATTRS]}
-                    value={parFilter}
-                    getOptionLabel={(o) => o.replace(/_/g,' ')}
-                    onChange={(_e, newValue) => applyParFilter(newValue)}
-                    sx={{ minWidth: 220 }}
-                    renderInput={(params) => <TextField {...params} label="PAR Attributes" />}
-                    renderTags={(value, getTagProps) =>
-                        value.map((option, index) => (
-                            <Chip {...getTagProps({index})} key={option} label={option.replace(/_/g,' ')} size="small" />
-                        ))
-                    }
-                />
+                <Tooltip title="PAR filter">
+                    <Badge badgeContent={countActiveParFilters(parFilterState)} color="primary">
+                        <IconButton onClick={(e) => setParAnchor(e.currentTarget)}>
+                            <FilterListIcon />
+                        </IconButton>
+                    </Badge>
+                </Tooltip>
+                <Popover
+                    open={Boolean(parAnchor)}
+                    anchorEl={parAnchor}
+                    onClose={() => setParAnchor(null)}
+                    anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+                    transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+                >
+                    <ParFilterBuilder onChange={handleParFilterChange} />
+                </Popover>
             </Stack>
             <Stack direction='row' spacing={2} sx={{mb:2}}>
                 {selectedItems.length > 0 && (

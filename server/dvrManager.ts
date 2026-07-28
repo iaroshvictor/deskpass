@@ -2,11 +2,31 @@ import { spawn } from 'child_process';
 import { createInterface } from 'readline';
 import { mkdirSync, statSync } from 'fs';
 import { join } from 'path';
+import { createClient } from 'redis';
 import { CamsCollection, Cam } from '/imports/api/cams';
 import { SettingsCollection, DVRConfig, DVR_DEFAULTS } from '/imports/api/settings';
 import { RecordingsCollection } from '/imports/api/recordings';
 
-const DVR_BIN = '/home/devel/deskpass_cam/bdvr_mux/bdvr_mux';
+// Overridable for deployment (set DVR_BIN in the service env / deskpass.env).
+// Falls back to the dev source location.
+const DVR_BIN = process.env.DVR_BIN || '/home/devel/deskpass_cam/bdvr_mux/bdvr_mux';
+
+// perceptAdd registers each camera's raw stream url under cam:stream:<camId>;
+// there is no fixed :8554 MediaMTX endpoint anymore, so the stream url the DVR
+// records from must be resolved from redis.
+const redisGet = await createClient()
+  .on('error', (err) => console.log('[DVR] redis error', err))
+  .connect();
+
+async function resolveAiUrl(camId: string, timeoutMs = 20_000): Promise<string | null> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const url = await redisGet.get(`cam:stream:${camId}`);
+    if (url) return url;
+    if (Date.now() >= deadline) return null;
+    await new Promise((r) => setTimeout(r, 2000));   // cam process may still be booting
+  }
+}
 
 // Status codes from bdvr_mux
 const STATUS_ACTIVE           = 2;
@@ -179,14 +199,15 @@ function _spawnHandle(
         if (!_config.enabled || _handles[camId]) return;
         CamsCollection.findOneAsync({ _id: camId }).then((latestCam) => {
           if (latestCam && _config.enabled)
-            spawnForCam(camId, latestCam as Cam & { _id: string }, _config);
+            spawnForCam(camId, latestCam as Cam & { _id: string }, _config)
+              .catch((e) => console.error('[DVR] respawn error:', e));
         }).catch(() => {});
       }, 5000);
     }
   });
 }
 
-function spawnForCam(
+async function spawnForCam(
   camId: string,
   cam: Cam & { _id: string },
   config: DVRConfig,
@@ -199,9 +220,22 @@ function spawnForCam(
   }
   stopFallbackForCam(camId);
 
-  const url = config.streamSource === 'ai'
-    ? `rtsp://localhost:8554/${camId}`
-    : cam.streamurl;
+  let url = cam.streamurl;
+  if (config.streamSource === 'ai') {
+    const aiUrl = await resolveAiUrl(camId);
+    if (!aiUrl) {
+      console.warn(`[DVR] "${cam.name}" (${camId}): no AI stream registered in redis — retrying in 10s`);
+      setTimeout(() => {
+        if (_config.enabled && !_handles[camId]) {
+          spawnForCam(camId, cam, _config).catch((e) => console.error('[DVR] respawn error:', e));
+        }
+      }, 10_000);
+      return;
+    }
+    url = aiUrl;
+  }
+
+  if (_handles[camId]) return;   // spawned concurrently while we were polling redis
 
   _spawnHandle(camId, cam, config, url, false, false);
 }
@@ -231,7 +265,7 @@ async function startAllCams(config: DVRConfig) {
   const cams = await CamsCollection.find({}).fetchAsync();
   for (const cam of cams) {
     if (cam._id && cam.streamurl) {
-      spawnForCam(cam._id, cam as Cam & { _id: string }, config);
+      await spawnForCam(cam._id, cam as Cam & { _id: string }, config);
     }
   }
 }
@@ -277,12 +311,16 @@ export function initDvr() {
   CamsCollection.find({}).observeChanges({
     added(id, fields) {
       if (!_config.enabled || !fields.streamurl) return;
-      spawnForCam(id, { _id: id, ...fields } as Cam & { _id: string }, _config);
+      spawnForCam(id, { _id: id, ...fields } as Cam & { _id: string }, _config)
+        .catch((e) => console.error('[DVR] spawn error:', e));
     },
     changed(id, fields) {
       if (!_config.enabled || !fields.streamurl) return;
       CamsCollection.findOneAsync({ _id: id }).then((cam) => {
-        if (cam && _config.enabled) spawnForCam(id, cam as Cam & { _id: string }, _config);
+        if (cam && _config.enabled) {
+          spawnForCam(id, cam as Cam & { _id: string }, _config)
+            .catch((e) => console.error('[DVR] spawn error:', e));
+        }
       }).catch(console.error);
     },
     removed(id) {

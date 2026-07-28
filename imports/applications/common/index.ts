@@ -18,6 +18,9 @@ import OperatorMethods from './Operators/serverMethods';
 import SettingsMethods from './Settings/serverMethods';
 import RoleBuilderMethods from './RoleBuilder/serverMethods';
 import Settings from './Settings'
+import ScenariosApp from './scenarios';
+import ScenarioArchiveApp from './scenarioArchive';
+import scenarioMethods from './scenarios/serverMethods';
 export const CommonMethods = {
     ...zoneMethods,
     ...camMethods,
@@ -26,6 +29,7 @@ export const CommonMethods = {
     ...OperatorMethods,
     ...SettingsMethods,
     ...RoleBuilderMethods,
+    ...scenarioMethods,
 }
 export default {
     Zones,
@@ -42,4 +46,6 @@ export default {
     ModelsManagementApp,
     DvrApp,
     RoleBuilderApp,
+    ScenariosApp,
+    ScenarioArchiveApp,
 };

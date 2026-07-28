@@ -9,19 +9,29 @@ import DialogActions from '@mui/material/DialogActions';
 import Button from '@mui/material/Button';
 import Slide from '@mui/material/Slide';
 import { TransitionProps } from '@mui/material/transitions';
-import { Alert, Box, Card, Chip, Grid, AlertTitle, Stack, Paper, Typography } from '@mui/material';
+import { Alert, Box, Card, Grid, AlertTitle, Stack, Paper, Typography } from '@mui/material';
 import { CamsCollection } from '/imports/api/cams';
 import {VisitsSummaryCollection}   from '/imports/api/visitSummary';
 import { AlertsArchiveCollection } from '/imports/api/alertsArchive';
 import {AlertLists} from '/imports/api/alertLists';
 import { RecordingsCollection } from '/imports/api/recordings';
+import ParRepresentation from '/imports/applications/common/ParRepresentation';
 
 // Converts a raw PAR dict to sorted {label, score} pairs ready for display.
 // 'female' is always included: high score → "female", low score → "male".
+const FACING_ATTRS = ['facing_front', 'facing_side', 'facing_back'];
+
 export const parToChips = (par: Record<string, number | string>): {label: string, score: number}[] => {
     const chips: {label: string, score: number}[] = [];
+    let bestFacing: {label: string, score: number} | null = null;
+
     for (const [k, v] of Object.entries(par)) {
         if (k.endsWith('_color') || typeof v !== 'number') continue;
+        if (FACING_ATTRS.includes(k)) {
+            if (!bestFacing || v > bestFacing.score)
+                bestFacing = { label: k.replace(/_/g, ' '), score: v };
+            continue;
+        }
         if (k === 'female') {
             chips.push(v >= 0.5
                 ? { label: 'female', score: v }
@@ -31,27 +41,31 @@ export const parToChips = (par: Record<string, number | string>): {label: string
             chips.push({ label: k.replace(/_/g, ' '), score: v });
         }
     }
+    if (bestFacing) chips.push(bestFacing);
     return chips.sort((a, b) => b.score - a.score);
 };
 
 const PREROLL_MS = 5000;
 
-const AlertRecordingPlayer = ({ camId, timestamp }: { camId: string; timestamp: Date }) => {
-    const targetMs  = timestamp.getTime() - PREROLL_MS;
-    const dayStart  = new Date(timestamp); dayStart.setHours(0, 0, 0, 0);
-    const dayEnd    = new Date(timestamp); dayEnd.setHours(23, 59, 59, 999);
+export const AlertRecordingPlayer = ({ camId, timestamp }: { camId: string; timestamp: Date }) => {
+    const targetMs    = timestamp.getTime() - PREROLL_MS;
+    const windowStart = targetMs - 5 * 60 * 1000;   // 5 min before target
+    const windowEnd   = timestamp.getTime() + 60 * 1000; // 1 min after alert
 
-    useSubscribe('recordings', [camId], dayStart.getTime(), dayEnd.getTime(), 50);
+    useSubscribe('recordings', [camId], windowStart, windowEnd, 10);
 
-    const allRecs = useFind(() =>
-        RecordingsCollection.find({ camId }, { sort: { startedAt: -1 } })
+    const windowRecs = useFind(() =>
+        RecordingsCollection.find(
+            { camId, startedAt: { $gte: new Date(windowStart), $lte: new Date(windowEnd) } },
+            { sort: { startedAt: 1 } }
+        )
     );
 
-    // segment whose window contains targetMs
-    const recording = allRecs.find(r =>
-        r.startedAt.getTime() <= targetMs &&
-        (r.endedAt ? r.endedAt.getTime() >= targetMs : r.status === 'recording')
-    );
+    const recording = windowRecs.find(r => {
+        const start = new Date(r.startedAt).getTime();
+        const end   = r.endedAt ? new Date(r.endedAt).getTime() : null;
+        return start <= targetMs && (end !== null ? end >= targetMs : r.status === 'recording');
+    }) ?? null;
 
     const videoRef   = useRef<HTMLVideoElement>(null);
     const seekDoneRef = useRef(false);
@@ -218,30 +232,9 @@ const AlertItemModal = ({alertId, onCloseModal}:props) => {
                                     </Stack>
                                 )}
                                 {myAlert.par && Object.keys(myAlert.par).length > 0 && (
-                                    <Stack spacing={1} sx={{px:2, pb:1}}>
-                                        <Typography variant="caption" color="text.secondary" sx={{fontWeight:600}}>APPEARANCE</Typography>
-                                        {(['head_color','upper_color','lower_color'] as const).some(k => myAlert.par![k]) && (
-                                            <Stack direction='row' spacing={2}>
-                                                {(['head_color','upper_color','lower_color'] as const).map(k => myAlert.par![k] && (
-                                                    <Stack key={k} direction='row' spacing={0.5} alignItems='center'>
-                                                        <Box sx={{width:14, height:14, borderRadius:'50%', bgcolor:String(myAlert.par![k]), border:'1px solid #ccc'}} />
-                                                        <Typography variant="caption">{k.replace('_color','')}: {myAlert.par![k]}</Typography>
-                                                    </Stack>
-                                                ))}
-                                            </Stack>
-                                        )}
-                                        <Stack direction='row' spacing={0.5} flexWrap='wrap' useFlexGap>
-                                            {parToChips(myAlert.par).map(({label, score}) => (
-                                                <Chip
-                                                    key={label}
-                                                    label={`${label} ${(score * 100).toFixed(0)}%`}
-                                                    size="small"
-                                                    color="primary"
-                                                    variant="outlined"
-                                                />
-                                            ))}
-                                        </Stack>
-                                    </Stack>
+                                    <Box sx={{px:2, pb:1}}>
+                                        <ParRepresentation par={myAlert.par} />
+                                    </Box>
                                 )}
                                 <Box sx={{px:2, pb:1}}>
                                     <AlertRecordingPlayer camId={myAlert.source} timestamp={new Date(myAlert.timestamp)} />

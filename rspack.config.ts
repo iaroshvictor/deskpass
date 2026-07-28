@@ -14,6 +14,6 @@ import { TsCheckerRspackPlugin } from "ts-checker-rspack-plugin";
 export default defineConfig((/* Meteor */) => {
   return {
     plugins: [new TsCheckerRspackPlugin()],
-    externals: [{ canvas: 'commonjs canvas', '@node-rs/xxhash': 'commonjs @node-rs/xxhash' }],
+    externals: [{ canvas: 'commonjs canvas', '@node-rs/xxhash': 'commonjs @node-rs/xxhash', 'node-datachannel': 'commonjs node-datachannel' }],
   };
 });
