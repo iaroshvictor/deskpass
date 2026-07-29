@@ -216,7 +216,10 @@ async function getRelay(camId: string): Promise<Relay> {
   const existing = relays.get(camId);
   if (existing) return existing;
 
-  const input = await redisGet.get(`cam:stream:${camId}`);
+  // Prefer the engine's annotated RTSP output (boxes/pose/zones/lines burned in,
+  // frame-aligned); fall back to the raw camera url if the engine isn't emitting one.
+  const input = (await redisGet.get(`cam:annotated:${camId}`))
+             || (await redisGet.get(`cam:stream:${camId}`));
   if (!input) throw new Meteor.Error('no-stream', `no live stream registered for cam ${camId}`);
 
   const r: Relay = { viewers: new Set(), client: null as any, codec: 'H264', fmtp: '' };

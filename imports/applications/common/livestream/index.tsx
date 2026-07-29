@@ -12,84 +12,13 @@ import RestartAltIcon from '@mui/icons-material/RestartAlt';
 // Client-only collection fed by the 'cam_overlay' publication (server/main.ts).
 const CamOverlayCollection = new Mongo.Collection<any>('cam_overlay');
 
-// OpenPose skeleton edges (0-indexed), matching the engine's pose output.
-const POSE_EDGES: [number, number][] = [
-  [1,8],[8,9],[9,10],[1,11],[11,12],[12,13],[1,2],[2,3],[3,4],[2,16],
-  [1,5],[5,6],[6,7],[5,17],[1,0],[0,14],[0,15],[14,16],[15,17],
-];
-const MUX_W = 1920, MUX_H = 1080;   // metadata coordinate space
-
-// Canvas overlay: boxes, faces+landmarks, pose, zones, lines drawn over the
-// WebRTC video from the cam_overlay metadata (normalized to MUX_W×MUX_H).
-const AnnotatedOverlay = ({ cam, showOverlay }: { cam: Cam, showOverlay: boolean }) => {
-  useSubscribe('cam_overlay', cam._id);
-  const ov = useFind(() => CamOverlayCollection.find({ _id: cam._id }))[0];
-  const canvasRef = React.useRef<HTMLCanvasElement>(null);
-
-  React.useEffect(() => {
-    const cv = canvasRef.current;
-    if (!cv) return;
-    const ctx = cv.getContext('2d');
-    if (!ctx) return;
-    const W = cv.clientWidth, H = cv.clientHeight;
-    if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
-    ctx.clearRect(0, 0, W, H);
-    if (!showOverlay) return;
-    const sx = (x: number) => x / MUX_W * W, sy = (y: number) => y / MUX_H * H;
-
-    // zones (from cam definition)
-    for (const z of cam.overlayZones || []) {
-      if (!z.points?.length) continue;
-      ctx.beginPath();
-      z.points.forEach((p, i) => { const X = p[0]*W, Y = p[1]*H; i ? ctx.lineTo(X,Y) : ctx.moveTo(X,Y); });
-      ctx.closePath();
-      ctx.strokeStyle = z.borderColor || '#44AAFF'; ctx.lineWidth = 2; ctx.stroke();
-      if (z.zoneMarking) { ctx.fillStyle = (z.borderColor || '#44AAFF') + '22'; ctx.fill(); }
-    }
-    // lines (tripwires)
-    for (const l of cam.lines || []) {
-      let x1,y1,x2,y2;
-      if (l.orientation === 'v') { x1=(l.top??.5)*W; y1=0; x2=(l.bottom??.5)*W; y2=H; }
-      else { x1=0; y1=(l.left??.5)*H; x2=W; y2=(l.right??.5)*H; }
-      ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2);
-      ctx.strokeStyle = l.lineColor || '#FF4444'; ctx.lineWidth = 3; ctx.stroke();
-    }
-    if (!ov) return;
-    // person boxes + label + pose
-    for (const p of ov.persons || []) {
-      const [x1,y1,x2,y2] = p.bbox;
-      ctx.strokeStyle = p.known ? '#39FF14' : '#2196f3'; ctx.lineWidth = 2;
-      ctx.strokeRect(sx(x1), sy(y1), sx(x2-x1), sy(y2-y1));
-      const label = `P#${p.tid}` + (p.uc ? ` · ${p.uc}` : '');
-      ctx.font = '12px sans-serif';
-      const tw = ctx.measureText(label).width;
-      ctx.fillStyle = p.known ? 'rgba(57,255,20,.8)' : 'rgba(33,150,243,.8)';
-      ctx.fillRect(sx(x1), sy(y1) - 15, tw + 6, 15);
-      ctx.fillStyle = '#000'; ctx.fillText(label, sx(x1) + 3, sy(y1) - 4);
-      if (p.pose) {
-        ctx.strokeStyle = '#ff00ff'; ctx.lineWidth = 2;
-        for (const [a,b] of POSE_EDGES) {
-          const ja = p.pose[a], jb = p.pose[b];
-          if (ja && jb) { ctx.beginPath(); ctx.moveTo(sx(ja[0]),sy(ja[1])); ctx.lineTo(sx(jb[0]),sy(jb[1])); ctx.stroke(); }
-        }
-        ctx.fillStyle = '#00ffff';
-        for (const j of p.pose) if (j) { ctx.beginPath(); ctx.arc(sx(j[0]),sy(j[1]),3,0,7); ctx.fill(); }
-      }
-    }
-    // face boxes + landmarks
-    for (const f of ov.faces || []) {
-      const [x1,y1,x2,y2] = f.bbox;
-      ctx.strokeStyle = f.frontal ? '#FFD700' : 'rgba(255,215,0,.5)'; ctx.lineWidth = 1.5;
-      ctx.strokeRect(sx(x1), sy(y1), sx(x2-x1), sy(y2-y1));
-      if (f.lm5) { ctx.fillStyle = '#00ffff'; for (const pt of f.lm5) { ctx.beginPath(); ctx.arc(sx(pt[0]),sy(pt[1]),2,0,7); ctx.fill(); } }
-    }
-  }, [ov, showOverlay, cam.overlayZones, cam.lines]);
-
-  return <canvas ref={canvasRef} style={{ position:'absolute', top:0, left:0, width:'100%', height:'100%', pointerEvents:'none' }} />;
-};
+// The boxes/pose/zones/lines are now burned into the DeepStream video (engine
+// nvdsosd → annotated RTSP), so there is no client-side canvas overlay — only
+// the sidebar below. Raw-source fallback shows clean video (no annotations).
 
 // Right-side sidebar: live stats + recent face thumbnails (the annotated-stream look).
 const OverlaySidebar = ({ cam }: { cam: Cam }) => {
+  useSubscribe('cam_overlay', cam._id);
   const ov = useFind(() => CamOverlayCollection.find({ _id: cam._id }))[0];
   const status = useFind(() => CamLiveStatusCollection.find({ _id: cam._id }))[0];
   const thumbs = React.useRef<string[]>([]);
@@ -423,8 +352,7 @@ export const LiveCamPlayer = ({ cam, sx={} }: { cam: Cam, sx?:{[x:string]:any} }
                     objectFit: 'contain',
                 }}
                 />
-            {/* annotation overlay (boxes/faces/pose/zones/lines) + sidebar */}
-            <AnnotatedOverlay cam={cam} showOverlay={showOverlay} />
+            {/* boxes/pose/zones/lines are burned into the DeepStream video now — sidebar only */}
             {showOverlay && <OverlaySidebar cam={cam} />}
             {streamState !== 'live' && (
                 <Typography variant="caption" sx={{
@@ -438,7 +366,7 @@ export const LiveCamPlayer = ({ cam, sx={} }: { cam: Cam, sx?:{[x:string]:any} }
                 sx={{ position:'absolute', bottom:4, left:4, minWidth:0, px:1,
                       color:'#fff', backgroundColor:'rgba(0,0,0,.45)', fontSize:10,
                       '&:hover':{ backgroundColor:'rgba(0,0,0,.7)' } }}>
-                {showOverlay ? 'overlay ✓' : 'overlay'}
+                {showOverlay ? 'sidebar ✓' : 'sidebar'}
             </Button>
             <IconButton
                 onClick={toggleFullscreen}
