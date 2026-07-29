@@ -1,7 +1,7 @@
 import { createClient } from 'redis';
 import {
   ScenarioV2, ScenariosV2Collection, ScenarioEventsV2Collection,
-  PersonFilter, ScenarioSchedule,
+  PersonFilter, isScenarioArmed as isArmed,
 } from '/imports/api/scenarioModel';
 import { CamsCollection } from '/imports/api/cams';
 
@@ -35,17 +35,6 @@ const stateOf = (sid: string, camId: string): UnitState => {
   if (!s) { s = { condSince: null, lastFire: 0, perTrack: new Map(), events: [], offline: false }; unitState.set(k, s); }
   return s;
 };
-
-// ── schedule gate ────────────────────────────────────────────────────────────
-function isArmed(sched: ScenarioSchedule | undefined, now = new Date()): boolean {
-  if (!sched?.from || !sched?.to) return true;
-  if (sched.days?.length && !sched.days.includes(now.getDay())) return false;
-  const cur = now.getHours() * 60 + now.getMinutes();
-  const [fh, fm] = sched.from.split(':').map(Number);
-  const [th, tm] = sched.to.split(':').map(Number);
-  const from = fh * 60 + fm, to = th * 60 + tm;
-  return from <= to ? cur >= from && cur < to : cur >= from || cur < to; // midnight wrap
-}
 
 // ── firing ───────────────────────────────────────────────────────────────────
 async function fire(w: Watch, camId: string, message: string, details: any) {
@@ -108,7 +97,16 @@ function matchDetection(p: PersonFilter, det: any): boolean {
   if (p.identity === 'ids' && (!known || !(p.ids ?? []).includes(String(det.idInfo)))) return false;
   if (p.similarity !== undefined && known && (det.similarity ?? 0) < p.similarity) return false;
   for (const a of p.attributes ?? []) {
-    if ((det.par?.[a.attr] ?? 0) < a.min) return false;
+    const parValue = det.par?.[a.attr];
+    if (a.op === 'lt') {
+      if (!((parValue ?? 0) < a.value)) return false;
+    } else if (a.op === 'eq') {
+      if (parValue !== a.value) return false;
+    } else {
+      // op 'gte', or legacy { attr, min } shape
+      const threshold = (a.op === 'gte' ? a.value : a.min) ?? 0.5;
+      if ((parValue ?? 0) < threshold) return false;
+    }
   }
   return true;
 }

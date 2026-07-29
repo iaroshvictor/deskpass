@@ -1,18 +1,14 @@
 import React, { useState } from 'react';
-import { Box, Button, Popover, Stack, ToggleButton, Tooltip, Typography } from '@mui/material';
+import { Box, Button, Popover, Stack, Tooltip } from '@mui/material';
 import Iconify from '/imports/ui/components/iconify/iconify';
 import CheckIcon from '@mui/icons-material/Check';
+import { Row, ExclusiveGroup, MultiGroup, IconifyIcon as I } from '/imports/ui/components/CompactToggleGroup';
 
-import ManIcon         from '@mui/icons-material/Man';
-import WomanIcon       from '@mui/icons-material/Woman';
-import ElderlyIcon     from '@mui/icons-material/Elderly';
-import ChildCareIcon   from '@mui/icons-material/ChildCare';
-import PersonIcon      from '@mui/icons-material/Person';
-import FlipToFrontIcon from '@mui/icons-material/FlipToFront';
-import FlipToBackIcon  from '@mui/icons-material/FlipToBack';
-import EastIcon        from '@mui/icons-material/East';
-
-const I = ({ icon }: { icon: string }) => <Iconify icon={icon} width={18} />;
+import ManIcon       from '@mui/icons-material/Man';
+import WomanIcon     from '@mui/icons-material/Woman';
+import ElderlyIcon   from '@mui/icons-material/Elderly';
+import ChildCareIcon from '@mui/icons-material/ChildCare';
+import PersonIcon    from '@mui/icons-material/Person';
 
 // ── Color map (BGR→RGB, matching the engine's clothing-color palette) ────────
 const COLOR_MAP: Record<string, string> = {
@@ -47,16 +43,21 @@ const ColorPickerButton = ({ label, value, onChange }: {
                 <Box
                     onClick={e => setAnchor(e.currentTarget)}
                     sx={{
-                        width: 22, height: 22, borderRadius: '50%', cursor: 'pointer',
-                        bgcolor: css ?? 'action.disabledBackground',
-                        border: '2px solid', borderColor: value ? 'transparent' : 'divider',
+                        width: 24, height: 24, borderRadius: '50%', cursor: 'pointer',
+                        bgcolor: css ?? 'background.paper',
+                        border: value ? '2px solid transparent' : '1.5px dashed',
+                        borderColor: value ? 'transparent' : 'text.disabled',
                         outline: value ? '2px solid' : 'none',
                         outlineColor: 'primary.main',
                         outlineOffset: 1,
                         flexShrink: 0,
-                        transition: 'outline 0.1s',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        transition: 'outline 0.1s, border-color 0.1s',
+                        '&:hover': { borderColor: value ? 'transparent' : 'primary.main' },
                     }}
-                />
+                >
+                    {!value && <Iconify icon="mdi:palette-outline" width={13} style={{ opacity: 0.6 }} />}
+                </Box>
             </Tooltip>
             <Popover
                 open={Boolean(anchor)}
@@ -114,7 +115,7 @@ export interface ParFilterState {
     extras:    string[];
 }
 
-const EMPTY: ParFilterState = {
+export const EMPTY_PAR_FILTER: ParFilterState = {
     gender: null, age: null, facing: null,
     upperType: null, lowerType: null,
     headColor: null, upperColor: null, lowerColor: null,
@@ -140,72 +141,16 @@ export const countActiveParFilters = (s: ParFilterState): number =>
     [s.gender, s.age, s.facing, s.upperType, s.lowerType, s.headColor, s.upperColor, s.lowerColor]
         .filter(Boolean).length + s.extras.length;
 
-// ── Toggle helpers ───────────────────────────────────────────────────────────
-const SX_TB = {
-    px: 0.75, py: 0.5,
-    '&.Mui-selected': { bgcolor: 'primary.main', color: 'primary.contrastText',
-        '&:hover': { bgcolor: 'primary.dark' } },
-};
-
-const Row = ({ label, children }: { label: string; children: React.ReactNode }) => (
-    <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
-        <Typography variant="caption" color="text.secondary"
-            sx={{ minWidth: 48, fontSize: '0.6rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5 }}>
-            {label}
-        </Typography>
-        {children}
-    </Stack>
-);
-
-function ExclusiveGroup<T extends string>({ value, onChange, options }: {
-    value: T | null;
-    onChange: (v: T | null) => void;
-    options: { v: T; label: string; icon: React.ReactNode }[];
-}) {
-    return (
-        <Stack direction="row" sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, overflow: 'hidden' }}>
-            {options.map(({ v, label, icon }) => (
-                <Tooltip key={v} title={label}>
-                    <ToggleButton size="small" value={v} selected={value === v}
-                        onChange={() => onChange(value === v ? null : v)}
-                        sx={{ ...SX_TB, border: 'none', borderRadius: 0 }}>
-                        {icon}
-                    </ToggleButton>
-                </Tooltip>
-            ))}
-        </Stack>
-    );
-}
-
-function MultiGroup({ values, onChange, options }: {
-    values: string[];
-    onChange: (next: string[]) => void;
-    options: { v: string; label: string; icon: React.ReactNode }[];
-}) {
-    const toggle = (v: string) =>
-        onChange(values.includes(v) ? values.filter(x => x !== v) : [...values, v]);
-    return (
-        <Stack direction="row" sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, overflow: 'hidden' }}>
-            {options.map(({ v, label, icon }) => (
-                <Tooltip key={v} title={label}>
-                    <ToggleButton size="small" value={v} selected={values.includes(v)}
-                        onChange={() => toggle(v)}
-                        sx={{ ...SX_TB, border: 'none', borderRadius: 0 }}>
-                        {icon}
-                    </ToggleButton>
-                </Tooltip>
-            ))}
-        </Stack>
-    );
-}
+const MATCH_ALL_HINT = 'Matches people with ALL selected tags at once';
 
 // ── Main component ───────────────────────────────────────────────────────────
 interface Props {
+    initial?: ParFilterState;
     onChange: (conditions: Record<string, any>, state: ParFilterState) => void;
 }
 
-const ParFilterBuilder = ({ onChange }: Props) => {
-    const [state, setState] = useState<ParFilterState>(EMPTY);
+const ParFilterBuilder = ({ initial, onChange }: Props) => {
+    const [state, setState] = useState<ParFilterState>(initial ?? EMPTY_PAR_FILTER);
 
     const update = (patch: Partial<ParFilterState>) => {
         const next = { ...state, ...patch };
@@ -216,7 +161,7 @@ const ParFilterBuilder = ({ onChange }: Props) => {
     const updateExtras = (group: string[], next: string[]) =>
         update({ extras: [...state.extras.filter(e => !group.includes(e)), ...next] });
 
-    const clear = () => { setState(EMPTY); onChange({}, EMPTY); };
+    const clear = () => { setState(EMPTY_PAR_FILTER); onChange({}, EMPTY_PAR_FILTER); };
 
     const UPPER_PATTERNS = ['upper_logo', 'upper_plaid', 'upper_stride', 'upper_splice'];
     const LOWER_PATTERNS = ['lower_stripe', 'lower_pattern'];
@@ -252,9 +197,9 @@ const ParFilterBuilder = ({ onChange }: Props) => {
                 <ExclusiveGroup<Facing>
                     value={state.facing} onChange={v => update({ facing: v })}
                     options={[
-                        { v: 'facing_front', label: 'Facing front', icon: <FlipToFrontIcon fontSize="small" /> },
-                        { v: 'facing_side',  label: 'Facing side',  icon: <EastIcon fontSize="small" /> },
-                        { v: 'facing_back',  label: 'Facing back',  icon: <FlipToBackIcon fontSize="small" /> },
+                        { v: 'facing_front', label: 'Facing front (face visible)', icon: <I icon="mdi:eye" /> },
+                        { v: 'facing_side',  label: 'Facing side (profile)',       icon: <I icon="mdi:face-man-profile" /> },
+                        { v: 'facing_back',  label: 'Facing away (back turned)',   icon: <I icon="mdi:eye-off" /> },
                     ]}
                 />
             </Row>
@@ -278,7 +223,13 @@ const ParFilterBuilder = ({ onChange }: Props) => {
                 <MultiGroup
                     values={state.extras.filter(e => UPPER_PATTERNS.includes(e))}
                     onChange={next => updateExtras(UPPER_PATTERNS, next)}
-                    options={UPPER_PATTERNS.map(a => ({ v: a, label: a.replace('upper_', ''), icon: <Typography variant="caption" sx={{ fontSize: '0.6rem', lineHeight: 1 }}>{a.replace('upper_', '')}</Typography> }))}
+                    options={[
+                        { v: 'upper_logo',   label: 'Logo print',    icon: <I icon="mdi:tag-outline" /> },
+                        { v: 'upper_plaid',  label: 'Plaid pattern', icon: <I icon="mdi:grid" /> },
+                        { v: 'upper_stride', label: 'Striped',       icon: <I icon="mdi:view-headline" /> },
+                        { v: 'upper_splice', label: 'Color-blocked (spliced)', icon: <I icon="mdi:view-grid" /> },
+                    ]}
+                    hint={MATCH_ALL_HINT}
                 />
             </Row>
 
@@ -288,15 +239,19 @@ const ParFilterBuilder = ({ onChange }: Props) => {
                 <ExclusiveGroup<LowerType>
                     value={state.lowerType} onChange={v => update({ lowerType: v })}
                     options={[
-                        { v: 'trousers',    label: 'Trousers',     icon: <Typography variant="caption" sx={{ fontSize: '0.65rem', lineHeight: 1 }}>trousers</Typography> },
-                        { v: 'shorts',      label: 'Shorts',       icon: <Typography variant="caption" sx={{ fontSize: '0.65rem', lineHeight: 1 }}>shorts</Typography> },
-                        { v: 'skirt_dress', label: 'Skirt / dress', icon: <Typography variant="caption" sx={{ fontSize: '0.65rem', lineHeight: 1 }}>skirt</Typography> },
+                        { v: 'trousers',    label: 'Trousers',      icon: <I icon="game-icons:trousers" /> },
+                        { v: 'shorts',      label: 'Shorts',        icon: <I icon="game-icons:shorts" /> },
+                        { v: 'skirt_dress', label: 'Skirt / dress', icon: <I icon="game-icons:skirt" /> },
                     ]}
                 />
                 <MultiGroup
                     values={state.extras.filter(e => LOWER_PATTERNS.includes(e))}
                     onChange={next => updateExtras(LOWER_PATTERNS, next)}
-                    options={LOWER_PATTERNS.map(a => ({ v: a, label: a.replace('lower_', ''), icon: <Typography variant="caption" sx={{ fontSize: '0.6rem', lineHeight: 1 }}>{a.replace('lower_', '')}</Typography> }))}
+                    options={[
+                        { v: 'lower_stripe',  label: 'Striped',  icon: <I icon="mdi:view-headline" /> },
+                        { v: 'lower_pattern', label: 'Patterned', icon: <I icon="mdi:texture-box" /> },
+                    ]}
+                    hint={MATCH_ALL_HINT}
                 />
             </Row>
 
@@ -314,6 +269,7 @@ const ParFilterBuilder = ({ onChange }: Props) => {
                         { v: 'holds_object', label: 'Holds object', icon: <I icon="mdi:hand-extended" /> },
                         { v: 'boots',        label: 'Boots',        icon: <I icon="mingcute:shoe-fill" /> },
                     ]}
+                    hint={MATCH_ALL_HINT}
                 />
             </Row>
 

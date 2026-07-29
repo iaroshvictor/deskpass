@@ -7,27 +7,97 @@ import {
   Stack, Typography, Paper, Box, IconButton, Button, Chip, Switch, Tabs, Tab,
   Dialog, DialogTitle, DialogContent, DialogActions, TextField, MenuItem,
   Badge, Snackbar, Alert, Grow, Collapse, Slider, ToggleButton,
-  ToggleButtonGroup, Checkbox, FormControlLabel, Divider,
+  ToggleButtonGroup, Checkbox, FormControlLabel, Divider, Popover, Tooltip,
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import EditIcon from '@mui/icons-material/Edit';
 import AddIcon from '@mui/icons-material/Add';
 import DoneAllIcon from '@mui/icons-material/DoneAll';
 import BoltIcon from '@mui/icons-material/Bolt';
+import FilterListIcon from '@mui/icons-material/FilterList';
+import PersonIcon from '@mui/icons-material/Person';
+import SensorsIcon from '@mui/icons-material/Sensors';
+import SensorsOffIcon from '@mui/icons-material/SensorsOff';
+import GroupsIcon from '@mui/icons-material/Groups';
+import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
+import VideocamIcon from '@mui/icons-material/Videocam';
+import VideocamOffIcon from '@mui/icons-material/VideocamOff';
+import LoginIcon from '@mui/icons-material/Login';
+import VisibilityIcon from '@mui/icons-material/Visibility';
+import HourglassBottomIcon from '@mui/icons-material/HourglassBottom';
+import PublicIcon from '@mui/icons-material/Public';
+import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
+import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
+import PersonSearchIcon from '@mui/icons-material/PersonSearch';
+import TrendingUpIcon from '@mui/icons-material/TrendingUp';
+import TrendingDownIcon from '@mui/icons-material/TrendingDown';
+import SyncAltIcon from '@mui/icons-material/SyncAlt';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
+import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
+import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
+import WarningAmberIcon from '@mui/icons-material/WarningAmber';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import AccessTimeIcon from '@mui/icons-material/AccessTime';
+import RepeatIcon from '@mui/icons-material/Repeat';
+import ScheduleIcon from '@mui/icons-material/CalendarMonth';
+import ViewListIcon from '@mui/icons-material/ViewList';
+import GridViewIcon from '@mui/icons-material/GridView';
+import NightsStayIcon from '@mui/icons-material/NightsStay';
+import EventBusyIcon from '@mui/icons-material/EventBusy';
+import CircleIcon from '@mui/icons-material/Circle';
 import { CamsCollection } from '/imports/api/cams';
 import { CamZoneDefsCollection } from '/imports/api/camZoneDefs';
 import { CamLineDefsCollection } from '/imports/api/camLineDefs';
 import { CamLiveStatusCollection } from '/imports/api/camEvents';
 import {
   ScenarioV2, ScenariosV2Collection, ScenarioEventsV2Collection,
-  Condition, PersonFilter, scenarioSentence,
+  Condition, PersonFilter, PersonAttributeFilter, scenarioSentence, isScenarioArmed,
 } from '/imports/api/scenarioModel';
+import ParFilterBuilder, {
+  ParFilterState, EMPTY_PAR_FILTER, countActiveParFilters,
+} from '/imports/applications/common/ParRepresentation/ParFilterBuilder';
+import { IconifyIcon } from '/imports/ui/components/CompactToggleGroup';
 
-const PAR_ATTRS = [
-  'hat', 'glasses', 'backpack', 'handbag', 'shoulder_bag', 'holds_object',
-  'long_coat', 'boots', 'age_over_60', 'age_18_60', 'age_under_18', 'female',
-  'short_sleeve', 'long_sleeve', 'trousers', 'shorts', 'skirt_dress',
-];
+// ── PersonAttributeFilter[] ⇄ ParFilterState adapter ─────────────────────────
+// Mirrors parFilterToConditions() in ParFilterBuilder.tsx, but targets the
+// scenario rule's flat attributes[] shape instead of a Mongo selector.
+const parFilterToAttributes = (s: ParFilterState): PersonAttributeFilter[] => {
+  const out: PersonAttributeFilter[] = [];
+  if (s.gender === 'female') out.push({ attr: 'female', op: 'gte', value: 0.5 });
+  if (s.gender === 'male')   out.push({ attr: 'female', op: 'lt',  value: 0.5 });
+  if (s.age)        out.push({ attr: s.age,       op: 'gte', value: 0.6 });
+  if (s.facing)     out.push({ attr: s.facing,    op: 'gte', value: 0.6 });
+  if (s.upperType)  out.push({ attr: s.upperType, op: 'gte', value: 0.6 });
+  if (s.lowerType)  out.push({ attr: s.lowerType, op: 'gte', value: 0.5 });
+  if (s.headColor)  out.push({ attr: 'head_color',  op: 'eq', value: s.headColor });
+  if (s.upperColor) out.push({ attr: 'upper_color', op: 'eq', value: s.upperColor });
+  if (s.lowerColor) out.push({ attr: 'lower_color', op: 'eq', value: s.lowerColor });
+  s.extras.forEach(a => out.push({ attr: a, op: 'gte', value: 0.5 }));
+  return out;
+};
+
+const AGES = ['age_under_18', 'age_18_60', 'age_over_60'];
+const FACINGS = ['facing_front', 'facing_side', 'facing_back'];
+const UPPER_TYPES = ['short_sleeve', 'long_sleeve', 'long_coat'];
+const LOWER_TYPES = ['trousers', 'shorts', 'skirt_dress'];
+
+const attributesToParFilterState = (attrs?: PersonAttributeFilter[]): ParFilterState => {
+  const s: ParFilterState = { ...EMPTY_PAR_FILTER, extras: [] };
+  for (const a of attrs ?? []) {
+    if (a.attr === 'female') s.gender = (a.op === 'lt') ? 'male' : 'female';
+    else if (AGES.includes(a.attr))        s.age = a.attr as any;
+    else if (FACINGS.includes(a.attr))     s.facing = a.attr as any;
+    else if (UPPER_TYPES.includes(a.attr)) s.upperType = a.attr as any;
+    else if (LOWER_TYPES.includes(a.attr)) s.lowerType = a.attr as any;
+    else if (a.attr === 'head_color')      s.headColor = (a as any).value ?? null;
+    else if (a.attr === 'upper_color')     s.upperColor = (a as any).value ?? null;
+    else if (a.attr === 'lower_color')     s.lowerColor = (a as any).value ?? null;
+    else s.extras.push(a.attr);
+  }
+  return s;
+};
 
 const SEVERITY_COLOR: Record<string, 'info' | 'warning' | 'error'> = {
   info: 'info', warning: 'warning', critical: 'error',
@@ -63,12 +133,13 @@ const DEFAULT_DRAFT: ScenarioV2 = {
 };
 
 // ── pill (animated chip that opens its editor) ───────────────────────────────
-const Pill = ({ label, color, onClick, grow = true, outlined = false }: {
+const Pill = ({ label, color, onClick, grow = true, outlined = false, icon }: {
   label: string, color?: any, onClick: (e: React.MouseEvent<HTMLElement>) => void,
-  grow?: boolean, outlined?: boolean,
+  grow?: boolean, outlined?: boolean, icon?: React.ReactElement,
 }) => (
   <Grow in={grow} timeout={350}>
     <Chip
+      icon={icon}
       label={label}
       color={color ?? 'primary'}
       variant={outlined ? 'outlined' : 'filled'}
@@ -77,6 +148,7 @@ const Pill = ({ label, color, onClick, grow = true, outlined = false }: {
         fontWeight: 500, cursor: 'pointer', maxWidth: 380,
         transition: 'transform .15s',
         '&:hover': { transform: 'scale(1.06)' },
+        '& .MuiChip-icon': { color: 'inherit', opacity: 0.85 },
       }}
     />
   </Grow>
@@ -86,11 +158,13 @@ const Word = ({ children }: { children: React.ReactNode }) => (
   <Typography sx={{ mx: 0.3, color: 'text.secondary' }}>{children}</Typography>
 );
 
-const SectionTitle = ({ children }: { children: React.ReactNode }) => (
-  <Typography variant="overline" color="text.secondary"
-    sx={{ display: 'block', mb: 0.75, letterSpacing: 0.5, lineHeight: 1.4 }}>
-    {children}
-  </Typography>
+const SectionTitle = ({ icon, children }: { icon?: React.ReactNode, children: React.ReactNode }) => (
+  <Stack direction="row" spacing={0.5} alignItems="center" sx={{ mb: 0.75 }}>
+    {icon && <Box sx={{ display: 'flex', color: 'text.secondary', '& svg': { fontSize: '1rem' } }}>{icon}</Box>}
+    <Typography variant="overline" color="text.secondary" sx={{ letterSpacing: 0.5, lineHeight: 1.4 }}>
+      {children}
+    </Typography>
+  </Stack>
 );
 
 // ── the sentence composer dialog ────────────────────────────────────────────
@@ -192,6 +266,24 @@ const Composer = ({ open, initial, onClose }: {
     : scope.kind === 'line' ? `line “${lineDefs.find(l => l._id === scope.lineDefId)?.label ?? 'pick line'}”${placedCams.length ? ` (${placedCams.length} cams)` : ''}`
     : scope.camIds?.length ? (scope.camIds.length > 2 ? `${scope.camIds.length} cams` : placedCams.map(cm => cm.name).join(', ')) : 'pick cameras';
 
+  // icons that mirror the current selection — used on the sentence pills and section titles
+  const subjectIcon =
+    c.kind === 'person_arrived' ? <LoginIcon />
+    : c.kind === 'person_present' ? <VisibilityIcon />
+    : c.kind === 'person_dwell' ? <HourglassBottomIcon />
+    : c.kind === 'count' ? <GroupsIcon />
+    : c.kind === 'motion' ? <SensorsIcon />
+    : c.kind === 'crossing' ? <CompareArrowsIcon />
+    : <VideocamIcon />;
+  const whereIcon =
+    scope.kind === 'zone' ? <IconifyIcon icon="mdi:vector-polygon" />
+    : scope.kind === 'line' ? <IconifyIcon icon="mdi:vector-line" />
+    : <VideocamIcon />;
+  const alertIcon =
+    draft.severity === 'info' ? <InfoOutlinedIcon />
+    : draft.severity === 'warning' ? <WarningAmberIcon />
+    : <ErrorOutlineIcon />;
+
   const t = draft.rule.time ?? {};
   const save = async () => {
     try {
@@ -212,20 +304,20 @@ const Composer = ({ open, initial, onClose }: {
         {/* ── the sentence ── */}
         <Paper variant="outlined" sx={{ p: 2, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 0.5, minHeight: 64 }}>
           <Word>When</Word>
-          <Pill label={subjectLabel} onClick={() => jumpTo('subject')} />
+          <Pill label={subjectLabel} icon={subjectIcon} onClick={() => jumpTo('subject')} />
           <Word>{scope.kind === 'zone' ? 'in' : 'on'}</Word>
-          <Pill label={whereLabel} color="secondary" onClick={() => jumpTo('where')} />
+          <Pill label={whereLabel} icon={whereIcon} color="secondary" onClick={() => jumpTo('where')} />
           {t.forSec !== undefined
-            ? <Pill label={`for ${t.forSec}s`} color="default" onClick={() => jumpTo('for')} />
-            : <Pill label="+ duration" outlined color="default" onClick={() => jumpTo('for')} />}
+            ? <Pill label={`for ${t.forSec}s`} icon={<AccessTimeIcon />} color="default" onClick={() => jumpTo('for')} />
+            : <Pill label="+ duration" icon={<AccessTimeIcon />} outlined color="default" onClick={() => jumpTo('for')} />}
           {(t.count && t.withinSec)
-            ? <Pill label={`×${t.count} within ${t.withinSec}s`} color="default" onClick={() => jumpTo('window')} />
-            : <Pill label="+ rate" outlined color="default" onClick={() => jumpTo('window')} />}
+            ? <Pill label={`×${t.count} within ${t.withinSec}s`} icon={<RepeatIcon />} color="default" onClick={() => jumpTo('window')} />
+            : <Pill label="+ rate" icon={<RepeatIcon />} outlined color="default" onClick={() => jumpTo('window')} />}
           {draft.schedule
-            ? <Pill label={`${draft.schedule.from}–${draft.schedule.to}`} color="default" onClick={() => jumpTo('schedule')} />
-            : <Pill label="+ schedule" outlined color="default" onClick={() => jumpTo('schedule')} />}
+            ? <Pill label={`${draft.schedule.from}–${draft.schedule.to}`} icon={<ScheduleIcon />} color="default" onClick={() => jumpTo('schedule')} />
+            : <Pill label="+ schedule" icon={<ScheduleIcon />} outlined color="default" onClick={() => jumpTo('schedule')} />}
           <Word>→</Word>
-          <Pill label={`${draft.severity} alert · ${draft.cooldownSec}s cooldown`}
+          <Pill label={`${draft.severity} alert · ${draft.cooldownSec}s cooldown`} icon={alertIcon}
             color={SEVERITY_COLOR[draft.severity]} onClick={() => jumpTo('alert')} />
         </Paper>
 
@@ -252,25 +344,25 @@ const Composer = ({ open, initial, onClose }: {
         {/* ── always-visible editor cards (click a pill to jump/flash) ── */}
         <Box sx={{ mt: 2, display: 'grid', gap: 1.5, gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' } }}>
           <Paper {...sec('subject', { gridColumn: '1 / -1' })}>
-            <SectionTitle>Detect</SectionTitle>
+            <SectionTitle icon={subjectIcon}>Detect</SectionTitle>
             <SubjectEditor c={c} setCondition={setCondition} />
           </Paper>
 
           <Paper {...sec('where', { gridColumn: '1 / -1' })}>
-            <SectionTitle>{scope.kind === 'zone' ? 'Where — zone' : scope.kind === 'line' ? 'Where — line' : 'Where — cameras'}</SectionTitle>
+            <SectionTitle icon={whereIcon}>{scope.kind === 'zone' ? 'Where — zone' : scope.kind === 'line' ? 'Where — line' : 'Where — cameras'}</SectionTitle>
             <WhereEditor draft={draft} setDraft={setDraft}
               cams={cams} zoneDefs={zoneDefs} lineDefs={lineDefs} placedCams={placedCams} />
           </Paper>
 
           <Paper {...sec('for')}>
-            <SectionTitle>Duration</SectionTitle>
+            <SectionTitle icon={<AccessTimeIcon />}>Duration</SectionTitle>
             <NumberEditor label="Must hold for (seconds, 0 = instant)"
               value={t.forSec ?? 0} min={0} max={600}
               onChange={v => setDraft(d => ({ ...d, rule: { ...d.rule, time: { ...d.rule.time, forSec: v || undefined } } }))} />
           </Paper>
 
           <Paper {...sec('window')}>
-            <SectionTitle>Rate</SectionTitle>
+            <SectionTitle icon={<RepeatIcon />}>Rate</SectionTitle>
             <Stack spacing={1}>
               <NumberEditor label="Number of occurrences" value={t.count ?? 0} min={0} max={100}
                 onChange={v => setDraft(d => ({ ...d, rule: { ...d.rule, time: { ...d.rule.time, count: v || undefined } } }))} />
@@ -281,18 +373,18 @@ const Composer = ({ open, initial, onClose }: {
           </Paper>
 
           <Paper {...sec('schedule')}>
-            <SectionTitle>Schedule</SectionTitle>
+            <SectionTitle icon={<ScheduleIcon />}>Schedule</SectionTitle>
             <ScheduleEditor draft={draft} setDraft={setDraft} />
           </Paper>
 
           <Paper {...sec('alert')}>
-            <SectionTitle>Alert</SectionTitle>
+            <SectionTitle icon={alertIcon}>Alert</SectionTitle>
             <Stack spacing={1.5}>
               <ToggleButtonGroup exclusive size="small" value={draft.severity}
                 onChange={(_, v) => v && setDraft(d => ({ ...d, severity: v }))}>
-                <ToggleButton value="info">info</ToggleButton>
-                <ToggleButton value="warning">warning</ToggleButton>
-                <ToggleButton value="critical">critical</ToggleButton>
+                <TB value="info"     tip="Informational — logged, low-priority"><InfoOutlinedIcon fontSize="small" color="info" /> info</TB>
+                <TB value="warning"  tip="Warning — worth a look soon"><WarningAmberIcon fontSize="small" color="warning" /> warning</TB>
+                <TB value="critical" tip="Critical — needs immediate attention"><ErrorOutlineIcon fontSize="small" color="error" /> critical</TB>
               </ToggleButtonGroup>
               <NumberEditor label="Cooldown between alerts (seconds)" value={draft.cooldownSec} min={5} max={3600}
                 onChange={v => setDraft(d => ({ ...d, cooldownSec: v }))} />
@@ -315,11 +407,29 @@ const NumberEditor = ({ label, value, min, max, onChange }: {
     inputProps={{ min, max }} onChange={e => onChange(Number(e.target.value))} />
 );
 
+// icon + label ToggleButton with an explanatory tooltip — used throughout the
+// scenario builder's toggle groups so options read at a glance, not just from text.
+const TB = ({ value, tip, children }: {
+  value: string | number, tip: string, children: React.ReactNode,
+}) => (
+  <Tooltip title={tip}>
+    <ToggleButton value={value} sx={{ gap: 0.5 }}>
+      {children}
+    </ToggleButton>
+  </Tooltip>
+);
+
 const SubjectEditor = ({ c, setCondition }: { c: Condition, setCondition: (c: Condition) => void }) => {
   const subject = subjectOf(c);
   const person: PersonFilter = (c as any).person ?? { identity: 'unknown' };
   const setPerson = (p: Partial<PersonFilter>) =>
     setCondition({ ...(c as any), person: { ...person, ...p } } as Condition);
+
+  const [parAnchor, setParAnchor] = React.useState<HTMLElement | null>(null);
+  const parFilterState = React.useMemo(() => attributesToParFilterState(person.attributes), [person.attributes]);
+  const activeParCount = countActiveParFilters(parFilterState);
+  const handleParFilterChange = (_conditions: Record<string, any>, state: ParFilterState) =>
+    setPerson({ attributes: parFilterToAttributes(state) });
 
   return (
     <Stack spacing={1.5}>
@@ -332,38 +442,57 @@ const SubjectEditor = ({ c, setCondition }: { c: Condition, setCondition: (c: Co
           else if (v === 'crossing') setCondition({ kind: 'crossing', direction: 'any' });
           else setCondition({ kind: 'camera', state: 'offline' });
         }}>
-        <ToggleButton value="person">Person</ToggleButton>
-        <ToggleButton value="motion">Motion</ToggleButton>
-        <ToggleButton value="count">Count</ToggleButton>
-        <ToggleButton value="crossing">Crossing</ToggleButton>
-        <ToggleButton value="camera">Camera</ToggleButton>
+        <TB value="person"   tip="Trigger on a person detection">     <PersonIcon fontSize="small" />   Person</TB>
+        <TB value="motion"   tip="Trigger on motion in a zone">        <SensorsIcon fontSize="small" />  Motion</TB>
+        <TB value="count"    tip="Trigger on a person count threshold"><GroupsIcon fontSize="small" />   Count</TB>
+        <TB value="crossing" tip="Trigger when a defined line is crossed"><CompareArrowsIcon fontSize="small" /> Crossing</TB>
+        <TB value="camera"   tip="Trigger on camera online/offline status"><VideocamIcon fontSize="small" /> Camera</TB>
       </ToggleButtonGroup>
       <Divider />
 
       {subject === 'person' && <>
         <ToggleButtonGroup exclusive size="small" value={c.kind}
           onChange={(_, v) => v && setCondition({ kind: v, person } as Condition)}>
-          <ToggleButton value="person_arrived">arrives</ToggleButton>
-          <ToggleButton value="person_present">is present</ToggleButton>
-          <ToggleButton value="person_dwell">stays (dwell)</ToggleButton>
+          <TB value="person_arrived" tip="Fires once per track, the moment the person enters view">
+            <LoginIcon fontSize="small" /> arrives</TB>
+          <TB value="person_present" tip="True for as long as the person is in view / in the zone">
+            <VisibilityIcon fontSize="small" /> is present</TB>
+          <TB value="person_dwell" tip="True once the person has stayed continuously — set duration below">
+            <HourglassBottomIcon fontSize="small" /> stays (dwell)</TB>
         </ToggleButtonGroup>
         <ToggleButtonGroup exclusive size="small" value={person.identity}
           onChange={(_, v) => v && setPerson({ identity: v })}>
-          <ToggleButton value="any">any</ToggleButton>
-          <ToggleButton value="known">known</ToggleButton>
-          <ToggleButton value="unknown">unknown</ToggleButton>
-          <ToggleButton value="ids">specific</ToggleButton>
+          <TB value="any"     tip="Matches any person, known or not"><PublicIcon fontSize="small" /> any</TB>
+          <TB value="known"   tip="Matches only people recognized in the persons database"><VerifiedUserIcon fontSize="small" /> known</TB>
+          <TB value="unknown" tip="Matches only people not recognized in the persons database"><HelpOutlineIcon fontSize="small" /> unknown</TB>
+          <TB value="ids"     tip="Matches only the specific person id(s) listed below"><PersonSearchIcon fontSize="small" /> specific</TB>
         </ToggleButtonGroup>
         {person.identity === 'ids' &&
           <TextField label="Person ids (comma-separated)" size="small"
             value={(person.ids ?? []).join(', ')}
             onChange={e => setPerson({ ids: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })} />}
-        <TextField select label="Attribute filter (optional)" size="small"
-          value={person.attributes?.[0]?.attr ?? ''}
-          onChange={e => setPerson({ attributes: e.target.value ? [{ attr: e.target.value, min: 0.5 }] : [] })}>
-          <MenuItem value="">— none —</MenuItem>
-          {PAR_ATTRS.map(a => <MenuItem key={a} value={a}>{a}</MenuItem>)}
-        </TextField>
+        <Stack direction="row" spacing={1} alignItems="center">
+          <Tooltip title="Attribute filter (optional)">
+            <Badge badgeContent={activeParCount} color="primary">
+              <Button size="small" variant="outlined" startIcon={<FilterListIcon fontSize="small" />}
+                onClick={e => setParAnchor(e.currentTarget)}>
+                Attribute filter
+              </Button>
+            </Badge>
+          </Tooltip>
+          {c.kind !== 'person_arrived' && activeParCount > 0 &&
+            <Typography variant="caption" color="warning.main">
+              Attribute filter only applies to “arrives” — ignored for {c.kind === 'person_present' ? 'is present' : 'stays (dwell)'}.
+            </Typography>}
+        </Stack>
+        <Popover
+          open={Boolean(parAnchor)}
+          anchorEl={parAnchor}
+          onClose={() => setParAnchor(null)}
+          anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+        >
+          <ParFilterBuilder initial={parFilterState} onChange={handleParFilterChange} />
+        </Popover>
         {c.kind === 'person_dwell' &&
           <Typography variant="caption" color="text.secondary">Set how long via the “+ duration” pill.</Typography>}
       </>}
@@ -371,8 +500,8 @@ const SubjectEditor = ({ c, setCondition }: { c: Condition, setCondition: (c: Co
       {subject === 'motion' && c.kind === 'motion' && <>
         <ToggleButtonGroup exclusive size="small" value={c.state}
           onChange={(_, v) => v && setCondition({ ...c, state: v })}>
-          <ToggleButton value="present">present</ToggleButton>
-          <ToggleButton value="absent">absent</ToggleButton>
+          <TB value="present" tip="Fires when motion appears (currently still)"><SensorsIcon fontSize="small" /> present</TB>
+          <TB value="absent"  tip="Fires when motion stops (currently moving)"><SensorsOffIcon fontSize="small" /> absent</TB>
         </ToggleButtonGroup>
         <Typography variant="caption">Motion threshold: {c.threshold.toFixed(1)} px
           <Typography component="span" variant="caption" color="text.secondary"> (static scene ≈ 0.3, real motion ≥ 2)</Typography>
@@ -384,8 +513,8 @@ const SubjectEditor = ({ c, setCondition }: { c: Condition, setCondition: (c: Co
       {subject === 'count' && c.kind === 'count' && <>
         <ToggleButtonGroup exclusive size="small" value={c.op}
           onChange={(_, v) => v && setCondition({ ...c, op: v })}>
-          <ToggleButton value="gte">at least</ToggleButton>
-          <ToggleButton value="lte">at most</ToggleButton>
+          <TB value="gte" tip="Fires when the count rises to or above the value"><TrendingUpIcon fontSize="small" /> at least</TB>
+          <TB value="lte" tip="Fires when the count drops to or below the value"><TrendingDownIcon fontSize="small" /> at most</TB>
         </ToggleButtonGroup>
         <NumberEditor label="Persons" value={c.value} min={0} max={500}
           onChange={v => setCondition({ ...c, value: v })} />
@@ -394,16 +523,19 @@ const SubjectEditor = ({ c, setCondition }: { c: Condition, setCondition: (c: Co
       {subject === 'crossing' && c.kind === 'crossing' && (
         <ToggleButtonGroup exclusive size="small" value={c.direction} sx={{ flexWrap: 'wrap' }}
           onChange={(_, v) => v && setCondition({ ...c, direction: v })}>
-          {['any', 'left', 'right', 'above', 'below'].map(d =>
-            <ToggleButton key={d} value={d}>{d}</ToggleButton>)}
+          <TB value="any"   tip="Either direction crosses the line"><SyncAltIcon fontSize="small" /> any</TB>
+          <TB value="left"  tip="Crossing right-to-left"><ArrowBackIcon fontSize="small" /> left</TB>
+          <TB value="right" tip="Crossing left-to-right"><ArrowForwardIcon fontSize="small" /> right</TB>
+          <TB value="above" tip="Crossing upward, bottom-to-top"><ArrowUpwardIcon fontSize="small" /> above</TB>
+          <TB value="below" tip="Crossing downward, top-to-bottom"><ArrowDownwardIcon fontSize="small" /> below</TB>
         </ToggleButtonGroup>
       )}
 
       {subject === 'camera' && c.kind === 'camera' && (
         <ToggleButtonGroup exclusive size="small" value={c.state}
           onChange={(_, v) => v && setCondition({ ...c, state: v })}>
-          <ToggleButton value="offline">goes offline</ToggleButton>
-          <ToggleButton value="online">comes back online</ToggleButton>
+          <TB value="offline" tip="Fires when the camera stops sending frames"><VideocamOffIcon fontSize="small" /> goes offline</TB>
+          <TB value="online"  tip="Fires when the camera resumes sending frames"><VideocamIcon fontSize="small" /> comes back online</TB>
         </ToggleButtonGroup>
       )}
     </Stack>
@@ -421,7 +553,17 @@ const WhereEditor = ({ draft, setDraft, cams, zoneDefs, lineDefs, placedCams }: 
       {allowed.length > 1 && (
         <ToggleButtonGroup exclusive size="small" value={scope.kind}
           onChange={(_, v) => v && setScope({ kind: v, camIds: [], zoneDefId: undefined, lineDefId: undefined })}>
-          {allowed.map((k: string) => <ToggleButton key={k} value={k}>{k === 'cams' ? 'cameras' : k}</ToggleButton>)}
+          {allowed.map((k: string) => (
+            <TB key={k} value={k}
+              tip={k === 'cams' ? 'Watch specific cameras directly'
+                : k === 'zone' ? 'Watch a shared zone, expanded to every camera it is placed on'
+                : 'Watch a shared line, expanded to every camera it is placed on'}>
+              {k === 'cams' ? <VideocamIcon fontSize="small" />
+                : k === 'zone' ? <IconifyIcon icon="mdi:vector-polygon" />
+                : <IconifyIcon icon="mdi:vector-line" />}
+              {k === 'cams' ? 'cameras' : k}
+            </TB>
+          ))}
         </ToggleButtonGroup>
       )}
       {scope.kind === 'cams' && (
@@ -472,23 +614,162 @@ const WhereEditor = ({ draft, setDraft, cams, zoneDefs, lineDefs, placedCams }: 
 };
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const WEEKDAYS = [1, 2, 3, 4, 5];
+const WEEKENDS = [0, 6];
+const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
+
+const timeToMin = (s: string) => { const [h, m] = s.split(':').map(Number); return h * 60 + m; };
+const isHourArmed = (from: string, to: string, hour: number) => {
+  const f = timeToMin(from), t = timeToMin(to), cur = hour * 60;
+  return f <= t ? cur >= f && cur < t : cur >= f || cur < t;
+};
+
+// ── 7×24 visual preview/editor — click a day header to toggle it, drag across
+// hour rows to set the From/To range (exact minutes still come from the fields).
+const ScheduleHeatmap = ({ days, from, to, onToggleDay, onDragRange }: {
+  days: number[]; from: string; to: string;
+  onToggleDay: (i: number) => void; onDragRange: (from: string, to: string) => void;
+}) => {
+  const [dragStart, setDragStart] = React.useState<number | null>(null);
+  const [dragEnd, setDragEnd] = React.useState<number | null>(null);
+  const dayActive = (d: number) => !days.length || days.includes(d);
+
+  const commitDrag = () => {
+    if (dragStart === null || dragEnd === null) return;
+    const lo = Math.min(dragStart, dragEnd), hi = Math.max(dragStart, dragEnd) + 1;
+    const fmt = (h: number) => h >= 24 ? '23:59' : `${String(h).padStart(2, '0')}:00`;
+    onDragRange(fmt(lo), fmt(hi));
+    setDragStart(null); setDragEnd(null);
+  };
+  React.useEffect(() => {
+    if (dragStart === null) return;
+    const up = () => commitDrag();
+    window.addEventListener('mouseup', up);
+    return () => window.removeEventListener('mouseup', up);
+  }, [dragStart, dragEnd]);
+
+  return (
+    <Box sx={{ userSelect: 'none' }}>
+      <Box sx={{ display: 'grid', gridTemplateColumns: '34px repeat(7, 1fr)', gap: '2px', maxWidth: 360 }}>
+        <Box />
+        {DAYS.map((d, i) => (
+          <Tooltip key={d} title={`${DAY_NAMES[i]} — click to toggle`}>
+            <Box onClick={() => onToggleDay(i)} sx={{
+              cursor: 'pointer', textAlign: 'center', fontSize: '0.6rem', fontWeight: 700, py: 0.4,
+              borderRadius: 0.5,
+              bgcolor: dayActive(i) ? 'primary.main' : 'action.hover',
+              color: dayActive(i) ? 'primary.contrastText' : 'text.secondary',
+            }}>
+              {d}
+            </Box>
+          </Tooltip>
+        ))}
+        {Array.from({ length: 24 }, (_, h) => h).map(h => (
+          <React.Fragment key={h}>
+            <Box sx={{ fontSize: '0.55rem', color: 'text.secondary', textAlign: 'right', pr: 0.5, lineHeight: '13px' }}>
+              {h % 3 === 0 ? `${String(h).padStart(2, '0')}:00` : ''}
+            </Box>
+            {DAYS.map((_, d) => {
+              const dragging = dragStart !== null && dragEnd !== null
+                && h >= Math.min(dragStart, dragEnd) && h <= Math.max(dragStart, dragEnd);
+              const armed = dayActive(d) && isHourArmed(from, to, h);
+              return (
+                <Box key={d}
+                  onMouseDown={() => { setDragStart(h); setDragEnd(h); }}
+                  onMouseEnter={() => { if (dragStart !== null) setDragEnd(h); }}
+                  sx={{
+                    height: 13, borderRadius: 0.25, cursor: 'pointer',
+                    bgcolor: dragging ? 'primary.light' : armed ? 'primary.main' : 'action.hover',
+                  }}
+                />
+              );
+            })}
+          </React.Fragment>
+        ))}
+      </Box>
+      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+        Drag across hours to set the range · click a day letter to toggle it
+      </Typography>
+    </Box>
+  );
+};
+
 const ScheduleEditor = ({ draft, setDraft }: any) => {
   const sched = draft.schedule ?? { days: [], from: '22:00', to: '06:00' };
   const set = (patch: any) => setDraft((d: ScenarioV2) => ({ ...d, schedule: { ...sched, ...patch } }));
+  const toggleDay = (i: number) => {
+    const cur: number[] = sched.days ?? [];
+    set({ days: cur.includes(i) ? cur.filter((x: number) => x !== i) : [...cur, i].sort() });
+  };
+
+  const [view, setView] = React.useState<'list' | 'heatmap'>('list');
+  const [now, setNow] = React.useState(new Date());
+  React.useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 30000);
+    return () => clearInterval(id);
+  }, []);
+  const armedNow = isScenarioArmed(draft.schedule, now);
+  const overnight = !!draft.schedule && sched.from > sched.to;
+  const zeroLength = !!draft.schedule && sched.from === sched.to;
+
   return (
     <Stack spacing={1.5}>
-      <ToggleButtonGroup size="small" value={sched.days} sx={{ flexWrap: 'wrap' }}
-        onChange={(_, days) => set({ days })}>
-        {DAYS.map((d, i) => <ToggleButton key={d} value={i}>{d}</ToggleButton>)}
-      </ToggleButtonGroup>
-      <Typography variant="caption" color="text.secondary">No days selected = every day</Typography>
+      <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+        <Tooltip title={draft.schedule ? "Whether this scenario is armed right now, per its schedule" : "No schedule set — always armed"}>
+          <Chip size="small" icon={<CircleIcon sx={{ fontSize: '0.6rem !important' }} />}
+            label={armedNow ? 'Armed now' : 'Not armed now'}
+            color={armedNow ? 'success' : 'default'} variant={armedNow ? 'filled' : 'outlined'} />
+        </Tooltip>
+        <Box sx={{ flex: 1 }} />
+        <ToggleButtonGroup exclusive size="small" value={view} onChange={(_, v) => v && setView(v)}>
+          <Tooltip title="List view"><ToggleButton value="list"><ViewListIcon fontSize="small" /></ToggleButton></Tooltip>
+          <Tooltip title="Heatmap view"><ToggleButton value="heatmap"><GridViewIcon fontSize="small" /></ToggleButton></Tooltip>
+        </ToggleButtonGroup>
+      </Stack>
+
+      <Stack direction="row" spacing={1}>
+        <Button size="small" onClick={() => set({ days: [...ALL_DAYS] })}>Every day</Button>
+        <Button size="small" onClick={() => set({ days: [...WEEKDAYS] })}>Weekdays</Button>
+        <Button size="small" onClick={() => set({ days: [...WEEKENDS] })}>Weekends</Button>
+      </Stack>
+
+      {view === 'list' ? (
+        <>
+          <ToggleButtonGroup size="small" value={sched.days} sx={{ flexWrap: 'wrap' }}
+            onChange={(_, days) => set({ days })}>
+            {DAYS.map((d, i) => (
+              <Tooltip key={d} title={DAY_NAMES[i]}>
+                <ToggleButton value={i}>{d}</ToggleButton>
+              </Tooltip>
+            ))}
+          </ToggleButtonGroup>
+          <Typography variant="caption" color="text.secondary">No days selected = every day</Typography>
+        </>
+      ) : (
+        <ScheduleHeatmap days={sched.days ?? []} from={sched.from} to={sched.to}
+          onToggleDay={toggleDay} onDragRange={(from, to) => set({ from, to })} />
+      )}
+
       <Stack direction="row" spacing={1}>
         <TextField label="From" type="time" size="small" value={sched.from}
           onChange={e => set({ from: e.target.value })} />
         <TextField label="To" type="time" size="small" value={sched.to}
           onChange={e => set({ to: e.target.value })} />
       </Stack>
-      <Button size="small" color="inherit"
+      {overnight && !zeroLength && (
+        <Stack direction="row" spacing={0.5} alignItems="center">
+          <NightsStayIcon fontSize="small" color="action" />
+          <Typography variant="caption" color="text.secondary">Overnight — spans midnight ({sched.from} to {sched.to} the next day)</Typography>
+        </Stack>
+      )}
+      {zeroLength && (
+        <Typography variant="caption" color="error">
+          From and To are equal — this schedule will never be armed. Widen the range or remove the schedule.
+        </Typography>
+      )}
+
+      <Button size="small" color="inherit" startIcon={<EventBusyIcon fontSize="small" />}
         onClick={() => setDraft((d: ScenarioV2) => ({ ...d, schedule: undefined }))}>
         Remove schedule (always armed)
       </Button>
@@ -606,8 +887,9 @@ const ScenariosRenderer = () => {
   return (
     <Paper sx={{ minHeight: '100%', p: 2, boxSizing: 'border-box', minWidth: 640 }}>
       <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 1 }}>
-        <Tab label="Scenarios" />
-        <Tab label={<Badge badgeContent={unseen.length} color="error"><Box sx={{ pr: unseen.length ? 2 : 0 }}>Events</Box></Badge>} />
+        <Tab icon={<BoltIcon fontSize="small" />} iconPosition="start" label="Scenarios" />
+        <Tab icon={<DoneAllIcon fontSize="small" />} iconPosition="start"
+          label={<Tooltip title="Log of scenario triggers"><Badge badgeContent={unseen.length} color="error"><Box sx={{ pr: unseen.length ? 2 : 0 }}>Events</Box></Badge></Tooltip>} />
       </Tabs>
       {tab === 0 ? <ScenariosTab /> : <EventsTab />}
       <Snackbar open={!!toast} autoHideDuration={5000} onClose={() => setToast(null)}

@@ -30,11 +30,21 @@ export interface ScenarioSchedule {
 }
 
 // ── subjects (who/what) with their thresholds ────────────────────────────────
+// A single PAR (Pedestrian Attribute Recognition) condition on det.par[attr]:
+//   op 'gte' → par[attr] >= value   (value: number, e.g. confidence threshold)
+//   op 'lt'  → par[attr] <  value   (value: number, e.g. gender male = female < 0.5)
+//   op 'eq'  → par[attr] === value  (value: string, e.g. clothing color)
+// Legacy entries carry only { attr, min } — treated as { op: 'gte', value: min }.
+export type PersonAttributeFilter =
+  | { attr: string; op: 'gte' | 'lt'; value: number; min?: undefined }
+  | { attr: string; op: 'eq'; value: string; min?: undefined }
+  | { attr: string; min: number; op?: undefined; value?: undefined }; // legacy shape
+
 export type PersonFilter = {
   identity: 'any' | 'known' | 'unknown' | 'ids';
   ids?: string[];                    // identity 'ids'
   similarity?: number;               // recognition similarity ≥ (known/ids)
-  attributes?: { attr: string; min: number }[];  // PAR filters, min = confidence ≥
+  attributes?: PersonAttributeFilter[]; // PAR filters — only evaluated for 'arrives' conditions today
 };
 
 // ── condition nodes (instantaneous predicates / events) ─────────────────────
@@ -88,6 +98,18 @@ export interface ScenarioEventV2 {
   details: { [k: string]: any };
   triggeredAt: Date;
   seen: boolean;
+}
+
+// shared by the server engine (the actual gate) and the client UI (live "armed
+// now" preview) so the two can never disagree about what a schedule means.
+export function isScenarioArmed(sched: ScenarioSchedule | undefined, now: Date = new Date()): boolean {
+  if (!sched?.from || !sched?.to) return true;
+  if (sched.days?.length && !sched.days.includes(now.getDay())) return false;
+  const cur = now.getHours() * 60 + now.getMinutes();
+  const [fh, fm] = sched.from.split(':').map(Number);
+  const [th, tm] = sched.to.split(':').map(Number);
+  const from = fh * 60 + fm, to = th * 60 + tm;
+  return from <= to ? cur >= from && cur < to : cur >= from || cur < to; // midnight wrap
 }
 
 export const ScenariosV2Collection      = new Mongo.Collection<ScenarioV2>('scenarios_v2');

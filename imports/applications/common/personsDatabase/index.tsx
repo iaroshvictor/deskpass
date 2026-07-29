@@ -514,7 +514,7 @@ const PersonsDatabaseRenderer= () =>{
                     anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
                     transformOrigin={{ vertical: 'top', horizontal: 'right' }}
                 >
-                    <ParFilterBuilder onChange={handleParFilterChange} />
+                    <ParFilterBuilder initial={parFilterState} onChange={handleParFilterChange} />
                 </Popover>
             </Stack>
             <Stack direction='row' spacing={2} sx={{mb:2}}>
