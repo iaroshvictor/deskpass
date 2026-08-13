@@ -60,6 +60,9 @@ export async function perceptAdd(cam: Cam): Promise<void> {
   // Livestream source: percept serves no RTSP (metadata-only), so the WebRTC
   // relay pulls the raw camera directly. Register the raw url as cam:stream.
   await redisWrite.set(`cam:stream:${cam._id}`, cam.streamurl);
+  // VLM caption watch-words for percept_caption.py (survives engine/redis restart)
+  await redisWrite.set(`cam:keywords:${cam._id}`,
+    JSON.stringify(cam.captionKeywords || []));
   await rest('add', {
     camera_id: cam._id,
     camera_name: cam.name || cam._id,
@@ -78,12 +81,23 @@ export async function perceptRemove(camId: string, camUrl?: string): Promise<voi
     `cam:stream:${camId}`,
     `cam:config:${camId}`,
     `cam:frames:${camId}`,
+    `cam:keywords:${camId}`,
+    `cam:snapshot:${camId}`,
+    `cam:caption:${camId}`,
+    `cam:captions:${camId}`,
   ]);
   await rest('remove', {
     camera_id: camId,
     camera_url: camUrl || '',
     change: 'camera_remove',
   });
+}
+
+// Push a camera's caption watch-words to redis without a full engine re-sync
+// (the caption service reads cam:keywords:<id> live each iteration).
+export async function perceptSetKeywords(camId: string, keywords: string[]): Promise<void> {
+  if (!camId) return;
+  await redisWrite.set(`cam:keywords:${camId}`, JSON.stringify(keywords || []));
 }
 
 // URL or zone/line change → remove then re-add so the engine re-reads config.

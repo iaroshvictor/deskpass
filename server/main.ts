@@ -41,7 +41,8 @@ import { ScenariosCollection, ScenarioEventsCollection } from '/imports/api/scen
 import { initScenarioEngine } from './scenarioEngine';
 import { ScenariosV2Collection, ScenarioEventsV2Collection } from '/imports/api/scenarioModel';
 import { initScenarioEngineV2 } from './scenarioEngineV2';
-import { perceptAdd, perceptRemove, perceptSync } from './perceptControl';
+import { perceptAdd, perceptRemove, perceptSync, perceptSetKeywords } from './perceptControl';
+import { CaptionAlertsCollection } from '/imports/api/captionAlerts';
 let tgBot :TelegramBot | undefined = undefined;
 let ApolloApi : any | undefined = undefined;
 
@@ -674,6 +675,9 @@ VisitsSummaryCollection.rawCollection().createIndex({ 'source': 1, 'timestamp': 
   AlertsArchiveCollection.rawCollection().createIndex({ idInfo: 1 });
   AlertsArchiveCollection.rawCollection().createIndex({ source: 1});
   AlertsArchiveCollection.rawCollection().createIndex({ source: 1, idInfo:1, timestamp:1 });
+  CaptionAlertsCollection.rawCollection().createIndex({ seen: 1 });
+  CaptionAlertsCollection.rawCollection().createIndex({ timestamp: -1 });
+  CaptionAlertsCollection.rawCollection().createIndex({ source: 1 });
   CamEventsCollection.rawCollection().createIndex({ timestamp: 1 });
   CamEventsCollection.rawCollection().createIndex({ source: 1, timestamp: -1 });
   ScenarioEventsCollection.rawCollection().createIndex({ triggeredAt: -1 });
@@ -831,10 +835,23 @@ VisitsSummaryCollection.rawCollection().createIndex({ 'source': 1, 'timestamp': 
   }
   }
 
+  // VLM caption keyword hit (fall/fight/gun/…) from percept_caption.py
+  const caption_alert_listener = async (message: string, channel: string) => {
+    if (channel !== 'caption_alert') return;
+    try {
+      const a = JSON.parse(message) as { source: string; text: string; keyword: string; ts: number };
+      await CaptionAlertsCollection.insertAsync({
+        source: a.source, text: a.text, keyword: a.keyword,
+        timestamp: new Date(a.ts || Date.now()), seen: false, seenBy: '', seenAt: null,
+      });
+    } catch (e) { console.warn('[caption] alert parse failed', e); }
+  };
+
   await redisClient.subscribe('new_detection', listener);
   await redisClient.subscribe('card_read', listener);
   await redisClient.subscribe('get_cams', cams_listener);
   await redisClient.subscribe('cam_events', cam_events_listener);
+  await redisClient.subscribe('caption_alert', caption_alert_listener);
 
   initScenarioEngine().catch((e) => console.error('[scenario] engine failed to start:', e));
   initScenarioEngineV2().catch((e) => console.error('[scenario2] engine failed to start:', e));
@@ -931,6 +948,34 @@ VisitsSummaryCollection.rawCollection().createIndex({ 'source': 1, 'timestamp': 
       } catch { /* transient */ }
     }, 100);
     self.onStop(() => Meteor.clearInterval(timer));
+  });
+  // Live VLM caption feed for one camera: polls the redis rolling list
+  // cam:captions:<id> (written by percept_caption.py) and pushes the tail as a
+  // single reactive doc { items: [{t, text}] }. Mirrors cam_overlay's pattern.
+  Meteor.publish("cam_captions", function (camId: string) {
+    if (typeof camId !== 'string') { this.ready(); return; }
+    const self: any = this;
+    let lastLen = -1, lastTail = '';
+    self.added("cam_captions", camId, { items: [] });
+    self.ready();
+    const timer = Meteor.setInterval(async () => {
+      try {
+        const raw: string[] = await pub.lRange(`cam:captions:${camId}`, -40, -1);
+        const tail = raw.length ? raw[raw.length - 1] : '';
+        if (raw.length === lastLen && tail === lastTail) return;  // nothing new
+        lastLen = raw.length; lastTail = tail;
+        const items = raw.map((s) => { try { return JSON.parse(s); } catch { return null; } })
+                         .filter(Boolean);
+        self.changed("cam_captions", camId, { items });
+      } catch { /* transient */ }
+    }, 1000);
+    self.onStop(() => Meteor.clearInterval(timer));
+  });
+  Meteor.publish("caption_alerts", function (filter: any = {}, limit: number = 100) {
+    return CaptionAlertsCollection.find(filter, { sort: { timestamp: -1 }, limit });
+  });
+  Meteor.publish("caption_alerts_unseen", function () {
+    return CaptionAlertsCollection.find({ seen: false }, { sort: { timestamp: -1 }, limit: 20 });
   });
   Meteor.publish("scenarios", function () {
     return ScenariosCollection.find();
@@ -1139,6 +1184,22 @@ VisitsSummaryCollection.rawCollection().createIndex({ 'source': 1, 'timestamp': 
         // restart = re-sync the camera's source on the perception engine
         await perceptSync(cam as Cam);
       }
+      return true;
+    },
+    // Update a camera's VLM caption watch-words. Persists to Mongo and pushes
+    // them to redis (cam:keywords:<id>) so percept_caption.py picks them up live.
+    async setCaptionKeywords(camId: string, keywords: string[]) {
+      if (!this.userId) throw new Meteor.Error('not-authorized');
+      const clean = (Array.isArray(keywords) ? keywords : [])
+        .map((k) => String(k).trim()).filter(Boolean).slice(0, 40);
+      await CamsCollection.updateAsync({ _id: camId }, { $set: { captionKeywords: clean } });
+      await perceptSetKeywords(camId, clean);
+      return clean;
+    },
+    async markCaptionAlertSeen(alertId: string) {
+      if (!this.userId) throw new Meteor.Error('not-authorized');
+      await CaptionAlertsCollection.updateAsync(
+        { _id: alertId }, { $set: { seen: true, seenBy: 'root', seenAt: new Date() } });
       return true;
     },
     async doApolloSync(){

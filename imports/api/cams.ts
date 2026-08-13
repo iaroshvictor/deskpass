@@ -31,6 +31,7 @@ export interface Cam {
   snapshot: string;
   lines: CamLine[];
   overlayZones: CamOverlayZone[];
+  captionKeywords?: string[];   // VLM caption watch-words (fall, fight, gun, ...)
 }
 
 export const CamsCollection = new Mongo.Collection<Cam>('cams');

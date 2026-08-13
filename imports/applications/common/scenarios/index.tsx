@@ -388,6 +388,9 @@ const Composer = ({ open, initial, onClose }: {
               </ToggleButtonGroup>
               <NumberEditor label="Cooldown between alerts (seconds)" value={draft.cooldownSec} min={5} max={3600}
                 onChange={v => setDraft(d => ({ ...d, cooldownSec: v }))} />
+              <Divider />
+              <NotifyKeywordsEditor value={draft.notifyKeywords ?? []}
+                onChange={kw => setDraft(d => ({ ...d, notifyKeywords: kw }))} />
             </Stack>
           </Paper>
         </Box>
@@ -397,6 +400,39 @@ const Composer = ({ open, initial, onClose }: {
         <Button variant="contained" onClick={save}>{draft._id ? 'Save' : 'Create scenario'}</Button>
       </DialogActions>
     </Dialog>
+  );
+};
+
+// Scenario-level watch-words: any scenario can fire its alert when the live VLM
+// scene caption on a scoped camera mentions one of these words.
+const NotifyKeywordsEditor = ({ value, onChange }: { value: string[], onChange: (v: string[]) => void }) => {
+  const [draft, setDraft] = React.useState('');
+  const kws = value ?? [];
+  const add = () => {
+    const v = draft.trim().toLowerCase();
+    if (v && !kws.includes(v)) onChange([...kws, v]);
+    setDraft('');
+  };
+  return (
+    <Stack spacing={0.75}>
+      <Typography variant="caption" color="text.secondary">
+        Notify keywords — also fire this alert when the live scene caption (VLM) on a scoped camera mentions any of these words.
+      </Typography>
+      {kws.length > 0 &&
+        <Stack direction="row" flexWrap="wrap" gap={0.5}>
+          {kws.map(k => (
+            <Chip key={k} label={k} size="small" onDelete={() => onChange(kws.filter(x => x !== k))} />
+          ))}
+        </Stack>}
+      <Stack direction="row" flexWrap="wrap" gap={0.5}>
+        {['fall', 'fight', 'gun', 'fire', 'smoke'].filter(p => !kws.includes(p)).map(p => (
+          <Chip key={p} label={`+ ${p}`} size="small" variant="outlined" onClick={() => onChange([...kws, p])} />
+        ))}
+      </Stack>
+      <TextField size="small" fullWidth placeholder="add word, press Enter…"
+        value={draft} onChange={e => setDraft(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); add(); } }} />
+    </Stack>
   );
 };
 

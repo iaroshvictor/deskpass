@@ -2,15 +2,21 @@ import React from 'react';
 import Icon from './icon';
 import {AppType} from '../..';
 import { useFind, useSubscribe } from 'meteor/react-meteor-data';
-import { Stack, Typography, Paper, Box, IconButton, Snackbar, Chip, Button } from '@mui/material';
+import { Stack, Typography, Paper, Box, IconButton, Snackbar, Chip, Button, TextField } from '@mui/material';
 import { Cam, CamsCollection } from '/imports/api/cams';
 import { CamEventsCollection, CamLiveStatusCollection } from '/imports/api/camEvents';
+import { CaptionAlertsCollection } from '/imports/api/captionAlerts';
 import { Meteor } from 'meteor/meteor';
 import { Mongo } from 'meteor/mongo';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
 
 // Client-only collection fed by the 'cam_overlay' publication (server/main.ts).
 const CamOverlayCollection = new Mongo.Collection<any>('cam_overlay');
+// Fed by 'cam_captions' (live VLM scene-description feed) and 'caption_alerts'
+// (keyword hits). Both come from percept_caption.py via redis. captionAlerts uses
+// the shared /imports/api collection (a second same-named Mongo.Collection throws
+// on the server).
+const CamCaptionCollection = new Mongo.Collection<any>('cam_captions');
 
 // The boxes/pose/zones/lines are now burned into the DeepStream video (engine
 // nvdsosd → annotated RTSP), so there is no client-side canvas overlay — only
@@ -44,6 +50,80 @@ const OverlaySidebar = ({ cam }: { cam: Cam }) => {
     </Box>
   );
 };
+// Chat-like live scene-description feed + per-camera keyword watch editor.
+const CaptionBox = ({ cam }: { cam: Cam }) => {
+  useSubscribe('cam_captions', cam._id);
+  useSubscribe('caption_alerts', { source: cam._id, seen: false }, 5);
+  const doc = useFind(() => CamCaptionCollection.find({ _id: cam._id }))[0];
+  const items: { t: number; text: string }[] = doc?.items || [];
+  const alerts = useFind(() => CaptionAlertsCollection.find(
+    { source: cam._id, seen: false }, { sort: { timestamp: -1 }, limit: 1 }))[0];
+
+  const scrollRef = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    const el = scrollRef.current; if (el) el.scrollTop = el.scrollHeight;
+  }, [items.length]);
+
+  const [kw, setKw] = React.useState<string[]>(cam.captionKeywords || []);
+  const [draft, setDraft] = React.useState('');
+  React.useEffect(() => { setKw(cam.captionKeywords || []); }, [cam._id]);
+  const saveKw = (next: string[]) => {
+    setKw(next);
+    Meteor.call('setCaptionKeywords', cam._id, next);
+  };
+  const addKw = () => {
+    const v = draft.trim().toLowerCase();
+    if (v && !kw.includes(v)) saveKw([...kw, v]);
+    setDraft('');
+  };
+  const hits = (text: string) =>
+    kw.some((k) => new RegExp(`\\b${k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(text));
+
+  return (
+    <Box sx={{ px: 1, py: 0.5, background: 'rgba(18,18,20,.9)', color: '#ddd' }}>
+      <Stack direction="row" alignItems="center" spacing={1}>
+        <Typography sx={{ fontSize: 10, color: '#8ab4ff', letterSpacing: .5 }}>SCENE DESCRIPTION</Typography>
+        {alerts && (
+          <Chip size="small" color="error" label={`⚠ ${alerts.keyword}`}
+            onDelete={() => Meteor.call('markCaptionAlertSeen', alerts._id)}
+            sx={{ height: 18, fontSize: 10 }} />
+        )}
+      </Stack>
+      <Box ref={scrollRef} sx={{
+        height: 96, overflowY: 'auto', mt: 0.5, fontSize: 11, lineHeight: 1.35,
+        fontFamily: 'ui-monospace, monospace',
+      }}>
+        {items.length === 0 && (
+          <Typography sx={{ fontSize: 11, color: '#666', fontStyle: 'italic' }}>
+            waiting for captions…
+          </Typography>
+        )}
+        {items.map((it, i) => (
+          <Box key={i} sx={{ color: hits(it.text) ? '#ff6b6b' : '#ddd' }}>
+            <span style={{ color: '#666' }}>{new Date(it.t).toLocaleTimeString()} </span>
+            {it.text}
+          </Box>
+        ))}
+      </Box>
+      <Stack direction="row" flexWrap="wrap" gap={0.3} sx={{ mt: 0.5 }}>
+        {kw.map((k) => (
+          <Chip key={k} label={k} size="small" onDelete={() => saveKw(kw.filter((x) => x !== k))}
+            sx={{ height: 18, fontSize: 10 }} />
+        ))}
+      </Stack>
+      <TextField
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addKw(); } }}
+        placeholder="add watch-word (fall, fight, gun)…"
+        variant="standard" fullWidth
+        InputProps={{ sx: { fontSize: 11, color: '#ddd' } }}
+        sx={{ mt: 0.3 }}
+      />
+    </Box>
+  );
+};
+
 import FullscreenIcon from '@mui/icons-material/Fullscreen';
 import FullscreenExitIcon from '@mui/icons-material/FullscreenExit';
 
@@ -293,6 +373,7 @@ export const LiveCamPlayer = ({ cam, sx={} }: { cam: Cam, sx?:{[x:string]:any} }
     const videoBoxRef = React.useRef<HTMLDivElement>(null)
     const [isFullscreen, setIsFullscreen] = React.useState(false)
     const [showOverlay, setShowOverlay] = React.useState(true)
+    const [showCaptions, setShowCaptions] = React.useState(true)
     useWebRtcLive(cam._id || '', videoRef, streamEpoch, setStreamState)
     React.useEffect(() => {
         const onChange = () => setIsFullscreen(document.fullscreenElement === videoBoxRef.current)
@@ -368,6 +449,12 @@ export const LiveCamPlayer = ({ cam, sx={} }: { cam: Cam, sx?:{[x:string]:any} }
                       '&:hover':{ backgroundColor:'rgba(0,0,0,.7)' } }}>
                 {showOverlay ? 'sidebar ✓' : 'sidebar'}
             </Button>
+            <Button size="small" onClick={() => setShowCaptions(v => !v)}
+                sx={{ position:'absolute', bottom:4, left:70, minWidth:0, px:1,
+                      color:'#fff', backgroundColor:'rgba(0,0,0,.45)', fontSize:10,
+                      '&:hover':{ backgroundColor:'rgba(0,0,0,.7)' } }}>
+                {showCaptions ? 'captions ✓' : 'captions'}
+            </Button>
             <IconButton
                 onClick={toggleFullscreen}
                 size="small"
@@ -380,6 +467,7 @@ export const LiveCamPlayer = ({ cam, sx={} }: { cam: Cam, sx?:{[x:string]:any} }
                 {isFullscreen ? <FullscreenExitIcon /> : <FullscreenIcon />}
             </IconButton>
             </Box>
+            {showCaptions && <CaptionBox cam={cam} />}
             <CamLiveInfo cam={cam} />
              <Snackbar
                 open={!!message}

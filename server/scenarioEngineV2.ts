@@ -142,6 +142,21 @@ async function onStatus(msg: any) {
   }
 }
 
+// VLM caption keyword hit (from percept_caption.py). Any scenario scoped to
+// that camera whose notifyKeywords include the word fires its normal event —
+// so it lands in the existing EVENTS notifications, independent of `rule`.
+async function onCaptionAlert(msg: any) {
+  const kw = String(msg.keyword ?? '').toLowerCase();
+  if (!kw) return;
+  for (const w of watches.values()) {
+    const kws = w.scenario.notifyKeywords ?? [];
+    if (!kws.some(k => k.toLowerCase() === kw)) continue;
+    if (!w.units.some(u => u.camId === msg.source)) continue;
+    await evalEvent(w, msg.source, `Scene mentions “${msg.keyword}”`,
+      { keyword: msg.keyword, caption: msg.text });
+  }
+}
+
 async function onCrossing(msg: any) {
   for (const w of watches.values()) {
     const s = w.scenario, c = s.rule.condition;
@@ -256,6 +271,33 @@ async function resolveUnits(s: ScenarioV2): Promise<Unit[]> {
   return narrowed.map(c => ({ camId: c._id! }));
 }
 
+// Per-camera notify watch-words derived from every scenario's notifyKeywords,
+// published to redis so percept_caption.py evaluates them (union with the
+// camera's own caption-box words). Stale cams get cleared.
+const sceneKwCams = new Set<string>();
+async function publishSceneKeywords() {
+  if (!redisGet) return;
+  const perCam = new Map<string, Set<string>>();
+  for (const w of watches.values()) {
+    const kws = w.scenario.notifyKeywords ?? [];
+    if (!kws.length) continue;
+    for (const u of w.units) {
+      if (!perCam.has(u.camId)) perCam.set(u.camId, new Set());
+      for (const kw of kws) perCam.get(u.camId)!.add(kw.toLowerCase());
+    }
+  }
+  for (const [camId, kws] of perCam) {
+    await redisGet.set(`cam:scenario_kw:${camId}`, JSON.stringify([...kws]));
+    sceneKwCams.add(camId);
+  }
+  for (const camId of [...sceneKwCams]) {
+    if (!perCam.has(camId)) {
+      await redisGet.del(`cam:scenario_kw:${camId}`);
+      sceneKwCams.delete(camId);
+    }
+  }
+}
+
 async function rebuild() {
   const scenarios = await ScenariosV2Collection.find({ enabled: true }).fetchAsync();
   const next = new Map<string, Watch>();
@@ -266,6 +308,7 @@ async function rebuild() {
   }
   watches.clear();
   for (const [k, v] of next) watches.set(k, v);
+  await publishSceneKeywords().catch(console.error);
 }
 
 // ── lifecycle ────────────────────────────────────────────────────────────────
@@ -286,6 +329,9 @@ export async function initScenarioEngineV2() {
   });
   await sub.subscribe('new_detection', (message: string) => {
     try { onDetection(JSON.parse(message)).catch(console.error); } catch { /* malformed */ }
+  });
+  await sub.subscribe('caption_alert', (message: string) => {
+    try { onCaptionAlert(JSON.parse(message)).catch(console.error); } catch { /* malformed */ }
   });
 
   const requeue = () => { rebuild().catch(console.error); };

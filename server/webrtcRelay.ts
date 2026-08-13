@@ -290,7 +290,8 @@ Meteor.methods({
     // pass the camera's fmtp (profile-level-id + sprop-parameter-sets) so the
     // browser gets the SPS/PPS out-of-band even if the stream never sends them in-band.
     if (relay.codec === 'H265') video.addH265Codec(pt);
-    else video.addH264Codec(pt, relay.fmtp || undefined);
+    else if (relay.fmtp) video.addH264Codec(pt, relay.fmtp);   // fmtp must be a string, not undefined
+    else video.addH264Codec(pt);
     video.addSSRC(RELAY_SSRC, 'video');
     const track = pc.addTrack(video);
 

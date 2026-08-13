@@ -81,6 +81,10 @@ export interface ScenarioV2 {
   rule: ScenarioRule;
   severity: ScenarioSeverity;
   cooldownSec: number;
+  // Optional VLM scene-caption watch-words. When any appears in a scoped
+  // camera's live caption, the scenario fires an event (independent of `rule`),
+  // surfacing in the normal EVENTS notifications.
+  notifyKeywords?: string[];
   createdAt: Date;
   lastTriggeredAt?: Date;
   triggerCount?: number;
