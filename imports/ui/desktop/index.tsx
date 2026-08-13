@@ -12,6 +12,7 @@ import { WorkspacesCollection, App } from '/imports/api/workspace';
 import { RolesCollection, RoleDefinitionsCollection } from '/imports/api/roles';
 import { useSubscribe, useFind, useTracker } from 'meteor/react-meteor-data';
 import {AlertsArchiveCollection, AlertItem} from '/imports/api/alertsArchive'
+import { ScenarioEventsV2Collection } from '/imports/api/scenarioModel';
 import { AlertLists, AlertList } from '/imports/api/alertLists';
 import {SummaryMeta, VisitSummaryMetaCollection} from '/imports/api/visitSummary'
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
@@ -179,6 +180,8 @@ export default function Desktop() {
     const Cams = useFind(() => CamsCollection.find());
     const UnseenIntruders = useFind(() => IntruderAlertsCollection.find({ seen: false }, { sort: { timestamp: -1 }, limit: 10 }));
     const UnseenPersonAlerts = useFind(()=> AlertsArchiveCollection.find({seen:false}, { sort: { timestamp: -1 }, limit: 10 }));
+    useSubscribe('scenario_events_v2_unseen');
+    const UnseenScenarioEvents = useFind(() => ScenarioEventsV2Collection.find({ seen: false }, { sort: { triggeredAt: -1 }, limit: 10 }));
     useSubscribe('userRole');
     const userRoleEntry = useTracker(() => RolesCollection.findOne({ userId: Meteor.userId() ?? '' }), []);
     const userRoleDef   = useTracker(() => {
@@ -358,7 +361,7 @@ export default function Desktop() {
                      onCloseModal={onCloseModal}
                 />
             )}
-            {(UnseenPersonAlerts.length>0 || UnseenIntruders.length>0) &&(
+            {(UnseenPersonAlerts.length>0 || UnseenIntruders.length>0 || UnseenScenarioEvents.length>0) &&(
 
                 <Box sx={{ position: 'absolute', top: 10, right: 10, width: showAlerts ? '280px' : 'auto', zIndex: 1000 }}>
                     <Stack direction="row" spacing={1} sx={{ mb: 1 }}>
@@ -375,7 +378,7 @@ export default function Desktop() {
                         </IconButton>
                         {showAlerts && (
                             <Button
-                                onClick={()=>{Meteor.callAsync('seenAllIntruders'); Meteor.callAsync('setAllAlertsSeen')}}
+                                onClick={()=>{Meteor.callAsync('seenAllIntruders'); Meteor.callAsync('setAllAlertsSeen'); Meteor.callAsync('markScenarioEventsV2Seen')}}
                                 variant='contained'
                                 color='warning'
                                 sx={{ flexGrow: 1 }}
@@ -387,6 +390,20 @@ export default function Desktop() {
                     </Stack>
                     {showAlerts && (
                         <>
+                            {UnseenScenarioEvents.map((ev) => (
+                                <Box key={ev._id} sx={{ backgroundColor: 'rgba(0,0,0,0.78)', borderLeft: 4,
+                                    borderColor: `${ev.severity === 'critical' ? 'error' : ev.severity === 'info' ? 'info' : 'warning'}.main`,
+                                    borderRadius: 2, p: 1, mb: 1, position: 'relative' }}>
+                                    <Fab size="small" color="secondary" sx={{ position: 'absolute', top: -5, right: -5 }}
+                                        onClick={() => Meteor.callAsync('markScenarioEventsV2Seen', [ev._id])}>
+                                        <DisabledVisibleIcon />
+                                    </Fab>
+                                    <Typography variant="body2" sx={{ color: '#fff', pr: 3 }}>{ev.message}</Typography>
+                                    <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.6)' }}>
+                                        {Cams.find(c => c._id === ev.camId)?.name || ev.camId} · {new Date(ev.triggeredAt).toLocaleTimeString()}
+                                    </Typography>
+                                </Box>
+                            ))}
                             {UnseenPersonAlerts.map((alertItem) => (
                                 <PersonAlertBox
                                     key={alertItem._id}
