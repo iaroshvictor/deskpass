@@ -103,13 +103,14 @@ const SEVERITY_COLOR: Record<string, 'info' | 'warning' | 'error'> = {
   info: 'info', warning: 'warning', critical: 'error',
 };
 
-type SubjectKind = 'person' | 'motion' | 'count' | 'crossing' | 'camera';
+type SubjectKind = 'person' | 'motion' | 'count' | 'crossing' | 'camera' | 'scene';
 
 const subjectOf = (c: Condition): SubjectKind =>
   c.kind.startsWith('person') ? 'person'
   : c.kind === 'motion' ? 'motion'
   : c.kind === 'count' ? 'count'
-  : c.kind === 'crossing' ? 'crossing' : 'camera';
+  : c.kind === 'crossing' ? 'crossing'
+  : c.kind === 'camera' ? 'camera' : 'scene';
 
 // scope kinds a condition can attach to (first entry = default)
 const SCOPE_FOR: Record<Condition['kind'], ('cams' | 'zone' | 'line')[]> = {
@@ -120,6 +121,7 @@ const SCOPE_FOR: Record<Condition['kind'], ('cams' | 'zone' | 'line')[]> = {
   motion:         ['zone'],
   crossing:       ['line'],
   camera:         ['cams'],
+  scene:          ['cams'],   // VLM captions are per-camera (whole frame)
 };
 
 const DEFAULT_DRAFT: ScenarioV2 = {
@@ -259,7 +261,8 @@ const Composer = ({ open, initial, onClose }: {
     : c.kind === 'count' ? `${c.op === 'gte' ? '≥' : '≤'} ${c.value} persons`
     : c.kind === 'motion' ? `motion ${c.state} (≥${c.threshold}px)`
     : c.kind === 'crossing' ? `line crossed${c.direction !== 'any' ? ` → ${c.direction}` : ''}`
-    : `camera ${c.state}`;
+    : c.kind === 'camera' ? `camera ${c.state}`
+    : `scene mentions ${(c.keywords ?? []).join('/') || '…'}`;
 
   const whereLabel =
     scope.kind === 'zone' ? `zone “${zoneDefs.find(z => z._id === scope.zoneDefId)?.label ?? 'pick zone'}”${scope.camIds?.length ? ` (${scope.camIds.length}/${placedCams.length || '?'} cams)` : placedCams.length ? ` (${placedCams.length} cams)` : ''}`
@@ -274,7 +277,8 @@ const Composer = ({ open, initial, onClose }: {
     : c.kind === 'count' ? <GroupsIcon />
     : c.kind === 'motion' ? <SensorsIcon />
     : c.kind === 'crossing' ? <CompareArrowsIcon />
-    : <VideocamIcon />;
+    : c.kind === 'camera' ? <VideocamIcon />
+    : <IconifyIcon icon="mdi:image-text" />;
   const whereIcon =
     scope.kind === 'zone' ? <IconifyIcon icon="mdi:vector-polygon" />
     : scope.kind === 'line' ? <IconifyIcon icon="mdi:vector-line" />
@@ -388,9 +392,13 @@ const Composer = ({ open, initial, onClose }: {
               </ToggleButtonGroup>
               <NumberEditor label="Cooldown between alerts (seconds)" value={draft.cooldownSec} min={5} max={3600}
                 onChange={v => setDraft(d => ({ ...d, cooldownSec: v }))} />
-              <Divider />
-              <NotifyKeywordsEditor value={draft.notifyKeywords ?? []}
-                onChange={kw => setDraft(d => ({ ...d, notifyKeywords: kw }))} />
+              {/* Notify-keywords are the SCENE trigger's job; only offer them as an
+                  add-on when the primary DETECT is something else (no duplication). */}
+              {draft.rule.condition.kind !== 'scene' && <>
+                <Divider />
+                <NotifyKeywordsEditor value={draft.notifyKeywords ?? []}
+                  onChange={kw => setDraft(d => ({ ...d, notifyKeywords: kw }))} />
+              </>}
             </Stack>
           </Paper>
         </Box>
@@ -462,6 +470,7 @@ const SubjectEditor = ({ c, setCondition }: { c: Condition, setCondition: (c: Co
     setCondition({ ...(c as any), person: { ...person, ...p } } as Condition);
 
   const [parAnchor, setParAnchor] = React.useState<HTMLElement | null>(null);
+  const [kwDraft, setKwDraft] = React.useState('');
   const parFilterState = React.useMemo(() => attributesToParFilterState(person.attributes), [person.attributes]);
   const activeParCount = countActiveParFilters(parFilterState);
   const handleParFilterChange = (_conditions: Record<string, any>, state: ParFilterState) =>
@@ -476,13 +485,15 @@ const SubjectEditor = ({ c, setCondition }: { c: Condition, setCondition: (c: Co
           else if (v === 'motion') setCondition({ kind: 'motion', state: 'absent', threshold: 1.0 });
           else if (v === 'count') setCondition({ kind: 'count', op: 'gte', value: 3 });
           else if (v === 'crossing') setCondition({ kind: 'crossing', direction: 'any' });
-          else setCondition({ kind: 'camera', state: 'offline' });
+          else if (v === 'camera') setCondition({ kind: 'camera', state: 'offline' });
+          else setCondition({ kind: 'scene', keywords: [] });
         }}>
         <TB value="person"   tip="Trigger on a person detection">     <PersonIcon fontSize="small" />   Person</TB>
         <TB value="motion"   tip="Trigger on motion in a zone">        <SensorsIcon fontSize="small" />  Motion</TB>
         <TB value="count"    tip="Trigger on a person count threshold"><GroupsIcon fontSize="small" />   Count</TB>
         <TB value="crossing" tip="Trigger when a defined line is crossed"><CompareArrowsIcon fontSize="small" /> Crossing</TB>
         <TB value="camera"   tip="Trigger on camera online/offline status"><VideocamIcon fontSize="small" /> Camera</TB>
+        <TB value="scene"    tip="Trigger when the VLM scene caption mentions a word"><IconifyIcon icon="mdi:image-text" /> Scene</TB>
       </ToggleButtonGroup>
       <Divider />
 
@@ -574,6 +585,35 @@ const SubjectEditor = ({ c, setCondition }: { c: Condition, setCondition: (c: Co
           <TB value="online"  tip="Fires when the camera resumes sending frames"><VideocamIcon fontSize="small" /> comes back online</TB>
         </ToggleButtonGroup>
       )}
+
+      {subject === 'scene' && c.kind === 'scene' && <>
+        <Typography variant="caption" color="text.secondary">
+          Fires when the live VLM scene caption for a scoped camera mentions any of these words.
+        </Typography>
+        {c.keywords.length > 0 &&
+          <Stack direction="row" flexWrap="wrap" gap={0.5}>
+            {c.keywords.map(k => (
+              <Chip key={k} label={k} size="small"
+                onDelete={() => setCondition({ ...c, keywords: c.keywords.filter(x => x !== k) })} />
+            ))}
+          </Stack>}
+        <Stack direction="row" flexWrap="wrap" gap={0.5}>
+          {['fall', 'fight', 'gun', 'fire', 'smoke'].filter(p => !c.keywords.includes(p)).map(p => (
+            <Chip key={p} label={`+ ${p}`} size="small" variant="outlined"
+              onClick={() => setCondition({ ...c, keywords: [...c.keywords, p] })} />
+          ))}
+        </Stack>
+        <TextField size="small" fullWidth placeholder="add word, press Enter…"
+          value={kwDraft} onChange={e => setKwDraft(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              const v = kwDraft.trim().toLowerCase();
+              if (v && !c.keywords.includes(v)) setCondition({ ...c, keywords: [...c.keywords, v] });
+              setKwDraft('');
+            }
+          }} />
+      </>}
     </Stack>
   );
 };

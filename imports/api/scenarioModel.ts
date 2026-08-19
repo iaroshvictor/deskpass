@@ -55,7 +55,8 @@ export type Condition =
   | { kind: 'count'; op: 'gte' | 'lte'; value: number }      // persons in view / zone
   | { kind: 'motion'; state: 'present' | 'absent'; threshold: number }  // px, ~1.0
   | { kind: 'crossing'; direction: 'any' | 'left' | 'right' | 'above' | 'below' }
-  | { kind: 'camera'; state: 'offline' | 'online' };
+  | { kind: 'camera'; state: 'offline' | 'online' }
+  | { kind: 'scene'; keywords: string[] };  // VLM scene caption mentions any of these
 
 // time operators wrapping the condition
 export interface RuleTime {
@@ -143,6 +144,7 @@ export function scenarioSentence(s: ScenarioV2, names: {
     case 'motion':         what = `motion is ${c.state} (≥${c.threshold}px)`; break;
     case 'crossing':       what = `the line is crossed${c.direction !== 'any' ? ` → ${c.direction}` : ''}`; break;
     case 'camera':         what = `the camera goes ${c.state}`; break;
+    case 'scene':          what = `the scene mentions ${(c.keywords ?? []).join(' / ') || '…'}`; break;
   }
   const where =
     s.scope.kind === 'zone' ? ` in zone “${names.zone ?? s.scope.zoneDefId}”`

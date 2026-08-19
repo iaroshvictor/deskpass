@@ -142,15 +142,22 @@ async function onStatus(msg: any) {
   }
 }
 
-// VLM caption keyword hit (from percept_caption.py). Any scenario scoped to
-// that camera whose notifyKeywords include the word fires its normal event —
-// so it lands in the existing EVENTS notifications, independent of `rule`.
+// A scenario's caption watch-words. Mutually exclusive by DETECT type (matching
+// the composer, so there's nothing to keep in sync): a `scene` scenario uses its
+// primary condition's keywords; any other scenario uses its notifyKeywords add-on.
+const sceneWords = (s: ScenarioV2): string[] => {
+  const c = s.rule.condition;
+  return c.kind === 'scene' ? (c.keywords ?? []) : (s.notifyKeywords ?? []);
+};
+
+// VLM caption keyword hit (from percept_caption.py). Any scenario scoped to that
+// camera whose scene words include the matched word fires its normal event — so
+// it lands in the existing EVENTS notifications.
 async function onCaptionAlert(msg: any) {
   const kw = String(msg.keyword ?? '').toLowerCase();
   if (!kw) return;
   for (const w of watches.values()) {
-    const kws = w.scenario.notifyKeywords ?? [];
-    if (!kws.some(k => k.toLowerCase() === kw)) continue;
+    if (!sceneWords(w.scenario).some(k => k.toLowerCase() === kw)) continue;
     if (!w.units.some(u => u.camId === msg.source)) continue;
     await evalEvent(w, msg.source, `Scene mentions “${msg.keyword}”`,
       { keyword: msg.keyword, caption: msg.text });
@@ -279,7 +286,7 @@ async function publishSceneKeywords() {
   if (!redisGet) return;
   const perCam = new Map<string, Set<string>>();
   for (const w of watches.values()) {
-    const kws = w.scenario.notifyKeywords ?? [];
+    const kws = sceneWords(w.scenario);
     if (!kws.length) continue;
     for (const u of w.units) {
       if (!perCam.has(u.camId)) perCam.set(u.camId, new Set());
