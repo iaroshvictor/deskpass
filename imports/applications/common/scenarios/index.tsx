@@ -349,7 +349,7 @@ const Composer = ({ open, initial, onClose }: {
         <Box sx={{ mt: 2, display: 'grid', gap: 1.5, gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' } }}>
           <Paper {...sec('subject', { gridColumn: '1 / -1' })}>
             <SectionTitle icon={subjectIcon}>Detect</SectionTitle>
-            <SubjectEditor c={c} setCondition={setCondition} />
+            <SubjectEditor c={c} setCondition={setCondition} notifyKeywords={draft.notifyKeywords ?? []} />
           </Paper>
 
           <Paper {...sec('where', { gridColumn: '1 / -1' })}>
@@ -463,11 +463,19 @@ const TB = ({ value, tip, children }: {
   </Tooltip>
 );
 
-const SubjectEditor = ({ c, setCondition }: { c: Condition, setCondition: (c: Condition) => void }) => {
+const SubjectEditor = ({ c, setCondition, notifyKeywords = [] }: {
+  c: Condition, setCondition: (c: Condition) => void, notifyKeywords?: string[],
+}) => {
   const subject = subjectOf(c);
   const person: PersonFilter = (c as any).person ?? { identity: 'unknown' };
   const setPerson = (p: Partial<PersonFilter>) =>
     setCondition({ ...(c as any), person: { ...person, ...p } } as Condition);
+
+  // Remember the scene keywords across DETECT-type switches so toggling away and
+  // back (or opening a keyword scenario and switching to Scene) doesn't wipe them.
+  // Seed from the current scene condition, else the scenario's notify-keywords.
+  const kwMemory = React.useRef<string[]>((c as any).keywords ?? notifyKeywords);
+  if (c.kind === 'scene') kwMemory.current = c.keywords;
 
   const [parAnchor, setParAnchor] = React.useState<HTMLElement | null>(null);
   const [kwDraft, setKwDraft] = React.useState('');
@@ -486,7 +494,7 @@ const SubjectEditor = ({ c, setCondition }: { c: Condition, setCondition: (c: Co
           else if (v === 'count') setCondition({ kind: 'count', op: 'gte', value: 3 });
           else if (v === 'crossing') setCondition({ kind: 'crossing', direction: 'any' });
           else if (v === 'camera') setCondition({ kind: 'camera', state: 'offline' });
-          else setCondition({ kind: 'scene', keywords: [] });
+          else setCondition({ kind: 'scene', keywords: [...kwMemory.current] });
         }}>
         <TB value="person"   tip="Trigger on a person detection">     <PersonIcon fontSize="small" />   Person</TB>
         <TB value="motion"   tip="Trigger on motion in a zone">        <SensorsIcon fontSize="small" />  Motion</TB>
