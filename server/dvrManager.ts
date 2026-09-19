@@ -10,7 +10,7 @@ import { RecordingsCollection } from '/imports/api/recordings';
 // Path to the muxer binary. There is no sensible default: the previous
 // fallback pointed at one developer's home directory, so on every other host
 // recording failed with no indication why. Set DVR_BIN in the service
-// environment (see README) — without it DVR stays off and says so.
+// environment (see DEVELOPMENT.md) — without it DVR stays off and says so.
 const DVR_BIN = process.env.DVR_BIN || '';
 
 // perceptAdd registers each camera's raw stream url under cam:stream:<camId>;

@@ -147,9 +147,20 @@ describe('deployment assumptions are configurable', () => {
 });
 
 describe('the repository documents how to run the system', () => {
-  test('a README exists', () => {
-    const found = readdirSync('.').some((f) => /^readme(\.|$)/i.test(f));
-    assert.ok(found, 'no README: Redis, the perception service, DVR_BIN, APACS and ONVIF are undocumented');
+  // The contract is that the system is documented, not that the file is
+  // called README: a root README renders as the repository landing page on
+  // GitHub, which is not what these notes are for.
+  const notes = () => readdirSync('.').find((f) => /^(development|readme)(\.|$)/i.test(f));
+
+  test('the setup notes exist', () => {
+    assert.ok(notes(), 'no setup notes: Redis, the perception service, DVR_BIN, APACS and ONVIF are undocumented');
+  });
+
+  test('they still cover the external dependencies', () => {
+    const text = read(notes());
+    for (const topic of ['Redis', 'DVR_BIN', 'APACS', 'ONVIF', 'Mongo']) {
+      assert.match(text, new RegExp(topic, 'i'), `the setup notes no longer mention ${topic}`);
+    }
   });
 });
 
