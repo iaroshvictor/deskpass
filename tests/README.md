@@ -9,6 +9,7 @@ when `npm run test:audit` is green.
 | unit | `npm run test:unit` | no | pure guard logic (query sanitising, authorisation policy) |
 | static | `npm run test:static` | only for the bundle test | source contracts, client-bundle leakage, dependency advisories |
 | security | `npm run test:security` | **yes** | live DDP probes: publications, methods, query injection, default credentials |
+| forms | `npm run test:forms` | **yes** | every screen that submits a form: the method exists, refuses a stranger, and actually writes ([details](forms/README.md)) |
 | e2e | `npm run test:e2e` | **yes** + Playwright | the login screen in a real browser |
 
 Run everything except e2e:

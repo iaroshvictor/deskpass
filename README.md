@@ -66,7 +66,8 @@ Client-visible settings live in `settings-development.json` under `public`.
 ## Tests
 
 ```bash
-npm run test:audit      # unit + static + security
+npm run test:audit      # unit + static + security + forms
+npm run test:forms      # every screen that submits a form, needs the app running
 npm run test:e2e        # browser, needs Playwright installed
 ```
 
