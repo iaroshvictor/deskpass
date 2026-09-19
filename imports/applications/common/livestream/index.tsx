@@ -1,63 +1,257 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
+import createCache from '@emotion/cache';
+import { CacheProvider } from '@emotion/react';
 import Icon from './icon';
-import {AppType} from '../..';
+import { AppType } from '../..';
 import { useFind, useSubscribe } from 'meteor/react-meteor-data';
-import { Stack, Typography, Paper, Box, IconButton, Snackbar, Chip, Button, TextField } from '@mui/material';
+import { Box, Typography, IconButton, Snackbar, TextField } from '@mui/material';
 import { Cam, CamsCollection } from '/imports/api/cams';
 import { CamEventsCollection, CamLiveStatusCollection } from '/imports/api/camEvents';
 import { CaptionAlertsCollection } from '/imports/api/captionAlerts';
 import { Meteor } from 'meteor/meteor';
 import { Mongo } from 'meteor/mongo';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
+import FullscreenIcon from '@mui/icons-material/Fullscreen';
+import FullscreenExitIcon from '@mui/icons-material/FullscreenExit';
+import CloseIcon from '@mui/icons-material/Close';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
+import TextIncreaseIcon from '@mui/icons-material/TextIncrease';
+import TextDecreaseIcon from '@mui/icons-material/TextDecrease';
 
-// Client-only collection fed by the 'cam_overlay' publication (server/main.ts).
+// Client-only collection fed by the 'cam_overlay' publication (server/main.ts):
+// a single reactive doc per cam with the CURRENT frame's { persons, faces, fps }.
 const CamOverlayCollection = new Mongo.Collection<any>('cam_overlay');
-// Fed by 'cam_captions' (live VLM scene-description feed) and 'caption_alerts'
-// (keyword hits). Both come from percept_caption.py via redis. captionAlerts uses
-// the shared /imports/api collection (a second same-named Mongo.Collection throws
-// on the server).
+// Fed by 'cam_captions' (live VLM scene-description feed). caption_alerts uses the
+// shared /imports/api collection (a second same-named collection throws on server).
 const CamCaptionCollection = new Mongo.Collection<any>('cam_captions');
 
-// The boxes/pose/zones/lines are now burned into the DeepStream video (engine
-// nvdsosd → annotated RTSP), so there is no client-side canvas overlay — only
-// the sidebar below. Raw-source fallback shows clean video (no annotations).
-
-// Right-side sidebar: live stats + recent face thumbnails (the annotated-stream look).
-const OverlaySidebar = ({ cam }: { cam: Cam }) => {
-  useSubscribe('cam_overlay', cam._id);
-  const ov = useFind(() => CamOverlayCollection.find({ _id: cam._id }))[0];
-  const status = useFind(() => CamLiveStatusCollection.find({ _id: cam._id }))[0];
-  const thumbs = React.useRef<string[]>([]);
-  const faces = ov?.faces?.filter((f: any) => f.thumb) || [];
-  if (faces.length) { thumbs.current = [...faces.map((f: any) => f.thumb), ...thumbs.current].slice(0, 6); }
-  return (
-    <Box sx={{
-      position:'absolute', top:0, right:0, height:'100%', width:120,
-      background:'rgba(12,12,12,.72)', color:'#fff', p:0.5, pointerEvents:'none',
-      display:'flex', flexDirection:'column', gap:0.5,
-    }}>
-      <Typography sx={{ fontSize:10, color:'#8ab4ff' }}>PERSONS</Typography>
-      <Typography sx={{ fontSize:26, fontWeight:700, lineHeight:1 }}>{status?.persons ?? ov?.persons?.length ?? '—'}</Typography>
-      <Typography sx={{ fontSize:10, color:'#7CFC00' }}>FPS</Typography>
-      <Typography sx={{ fontSize:16 }}>{(ov?.fps ?? status?.fps ?? 0).toFixed(1)}</Typography>
-      <Typography sx={{ fontSize:10, color:'#FFD700' }}>FACES</Typography>
-      <Typography sx={{ fontSize:16 }}>{status?.faces ?? ov?.faces?.length ?? 0}</Typography>
-      <Box sx={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:0.3, mt:0.5 }}>
-        {thumbs.current.map((t, i) => (
-          <img key={i} src={`data:image/jpeg;base64,${t}`} style={{ width:'100%', borderRadius:2 }} />
-        ))}
-      </Box>
-    </Box>
-  );
+// ── dark tactical palette ────────────────────────────────────────────────────
+const C = {
+  bg: '#0a0a0c',
+  panel: '#141416',
+  panel2: '#0e0e10',
+  border: '#26262b',
+  borderSoft: '#1d1d21',
+  text: '#e8e8ea',
+  dim: '#6b6b74',
+  label: '#8a8a93',
+  green: '#3ddc84',
+  red: '#ff5a5a',
+  redBadge: '#d92c2c',
+  accent: '#7aa2ff',
 };
-// Chat-like live scene-description feed + per-camera keyword watch editor.
-const CaptionBox = ({ cam }: { cam: Cam }) => {
+const MONO = 'ui-monospace, "SF Mono", Menlo, Consolas, "Roboto Mono", monospace';
+
+// ── caption font size, persisted in a cookie ──────────────────────────────────
+const CAPTION_FONT_COOKIE = 'captionFontPx';
+const CAPTION_FONT_MIN = 9;
+const CAPTION_FONT_MAX = 22;
+const CAPTION_FONT_DEFAULT = 11.5;
+// SSR-safe: this module is pulled in by server/main.ts (via applications/common),
+// so cookie access must no-op when there is no document.
+const readCookie = (k: string): string | undefined =>
+  typeof document === 'undefined' ? undefined
+    : document.cookie.split('; ').find((r) => r.startsWith(k + '='))?.split('=').slice(1).join('=');
+const writeCookie = (k: string, v: string) => {
+  if (typeof document === 'undefined') return;
+  document.cookie = `${k}=${v}; path=/; max-age=${60 * 60 * 24 * 365}`;
+};
+// Shared across every card: the cookie is a single global preference, so all
+// SCENE LOGs must resize together (per-panel state would leave other cards stale
+// until they remounted).
+const captionFontStore = {
+  px: null as number | null,          // read from the cookie lazily, on first client access
+  subs: new Set<() => void>(),
+  subscribe(fn: () => void) { this.subs.add(fn); return () => { this.subs.delete(fn); }; },
+  get(): number {
+    if (this.px === null) {
+      const v = Number(readCookie(CAPTION_FONT_COOKIE));
+      this.px = v >= CAPTION_FONT_MIN && v <= CAPTION_FONT_MAX ? v : CAPTION_FONT_DEFAULT;
+    }
+    return this.px;
+  },
+  bump(delta: number) {
+    const cur = this.get();
+    const next = Math.min(CAPTION_FONT_MAX, Math.max(CAPTION_FONT_MIN, Math.round((cur + delta) * 2) / 2));
+    if (next === cur) return;
+    this.px = next;
+    writeCookie(CAPTION_FONT_COOKIE, String(next));
+    this.subs.forEach((fn) => fn());
+  },
+};
+const useCaptionFont = (): [number, (delta: number) => void] => {
+  const px = React.useSyncExternalStore(
+    (fn) => captionFontStore.subscribe(fn),
+    () => captionFontStore.get(),
+    () => CAPTION_FONT_DEFAULT,   // SSR snapshot
+  );
+  return [px, (d: number) => captionFontStore.bump(d)];
+};
+
+// ── pop-out window: renders children into a chromeless browser window ──────────
+// Uses a portal into a new window's document plus an emotion CacheProvider bound
+// to THAT window's <head>, so MUI/emotion styles land in the popup (not the
+// opener). Closing the popup (or unmounting) tears it down.
+const PopOut = ({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) => {
+  const containerRef = React.useRef<HTMLElement | null>(null);
+  const [cache, setCache] = React.useState<ReturnType<typeof createCache> | null>(null);
+  React.useEffect(() => {
+    const w = window.open('', '',
+      'popup=yes,noopener=no,width=860,height=620,toolbar=no,location=no,menubar=no,status=no');
+    if (!w) { onClose(); return; }
+    w.document.title = title;
+    w.document.body.style.margin = '0';
+    w.document.body.style.background = C.bg;
+    const div = w.document.createElement('div');
+    w.document.body.appendChild(div);
+    containerRef.current = div;
+    setCache(createCache({ key: 'popout', container: w.document.head }));
+    const bye = () => onClose();
+    w.addEventListener('beforeunload', bye);
+    return () => { w.removeEventListener('beforeunload', bye); w.close(); };
+  }, []);
+  if (!cache || !containerRef.current) return null;
+  return createPortal(<CacheProvider value={cache}>{children}</CacheProvider>, containerRef.current);
+};
+
+// ── WebRTC livestream ─────────────────────────────────────────────────────────
+// SDP offer/answer over DDP ('webrtcOffer' method, see server/webrtcRelay.ts),
+// media over a normal RTCPeerConnection. The server forwards the engine's H.264
+// RTP untouched — no transcoding anywhere.
+const useWebRtcLive = (
+  camId: string,
+  videoRef: React.RefObject<HTMLVideoElement>,
+  epoch: number,
+  onState: (s: 'connecting' | 'live' | 'error') => void,
+) => {
+  React.useEffect(() => {
+    if (!camId) return;
+    let pc: RTCPeerConnection | null = null;
+    let retry: ReturnType<typeof setTimeout> | null = null;
+    let disposed = false;
+
+    const start = async () => {
+      if (disposed) return;
+      onState('connecting');
+      pc = new RTCPeerConnection();
+      pc.addTransceiver('video', { direction: 'recvonly' });
+      pc.ontrack = (evt) => {
+        if (videoRef.current) videoRef.current.srcObject = evt.streams[0];
+      };
+      pc.onconnectionstatechange = () => {
+        if (!pc || disposed) return;
+        if (pc.connectionState === 'connected') onState('live');
+        if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+          onState('error');
+          pc.close(); pc = null;
+          retry = setTimeout(start, 3000);
+        }
+      };
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      // non-trickle: wait for ICE gathering so the offer carries candidates
+      await new Promise<void>((resolve) => {
+        if (pc!.iceGatheringState === 'complete') return resolve();
+        const timer = setTimeout(resolve, 2000);
+        pc!.onicegatheringstatechange = () => {
+          if (pc?.iceGatheringState === 'complete') { clearTimeout(timer); resolve(); }
+        };
+      });
+
+      try {
+        const answerSdp: string = await Meteor.callAsync(
+          'webrtcOffer', camId, pc!.localDescription!.sdp);
+        if (disposed || !pc) return;
+        await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
+      } catch (e) {
+        console.error('webrtcOffer failed:', e);
+        onState('error');
+        pc?.close(); pc = null;
+        retry = setTimeout(start, 5000);
+      }
+    };
+    start();
+    return () => {
+      disposed = true;
+      if (retry) clearTimeout(retry);
+      pc?.close();
+    };
+  }, [camId, epoch]);
+};
+
+// ── live clock (HH:MM:SS) ─────────────────────────────────────────────────────
+const useClock = () => {
+  const [t, setT] = React.useState(() => new Date());
+  React.useEffect(() => {
+    const id = setInterval(() => setT(new Date()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  return t.toLocaleTimeString([], { hour12: false });
+};
+
+// Return ONLY the faces present in the current frame. cam_overlay pushes the
+// latest frame's faces (and []) each tick, so we render that directly instead of
+// accumulating — a person who left the frame vanishes immediately. The TTL guard
+// clears faces if the overlay stops updating (stream died mid-frame) so a stale
+// last frame can't linger on screen.
+const FACE_TTL_MS = 1500;
+const useFreshFaces = (ov: any): any[] => {
+  const last = React.useRef({ frame: -1, at: 0 });
+  const [, tick] = React.useState(0);
+  const f = ov?.frame;
+  if (f !== undefined && f !== last.current.frame) last.current = { frame: f, at: Date.now() };
+  React.useEffect(() => {
+    const id = setInterval(() => tick((x) => x + 1), 700);
+    return () => clearInterval(id);
+  }, []);
+  const fresh = Date.now() - last.current.at < FACE_TTL_MS;
+  return fresh ? (ov?.faces?.filter((x: any) => x.thumb) || []) : [];
+};
+
+// ── small building blocks ─────────────────────────────────────────────────────
+const StatChip = ({ label, value, color = C.text }: { label: string; value: React.ReactNode; color?: string }) => (
+  <Box sx={{
+    display: 'flex', alignItems: 'center', gap: 0.75,
+    px: 1, py: 0.4, background: 'rgba(8,8,10,.72)', border: `1px solid ${C.borderSoft}`,
+    borderRadius: 1, fontFamily: MONO,
+  }}>
+    <Typography sx={{ fontSize: 9, letterSpacing: 1, color: C.label }}>{label}</Typography>
+    <Typography sx={{ fontSize: 12, fontWeight: 700, lineHeight: 1, color }}>{value}</Typography>
+  </Box>
+);
+
+// Module-scoped so its identity is stable: the card re-renders ~10×/sec (frame
+// feed + face-TTL tick); an inline component would remount the tab DOM every
+// render and drop clicks.
+const TabButton = ({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) => (
+  <Box onClick={onClick} sx={{
+    px: 1.25, py: 0.5, fontFamily: MONO, fontSize: 10, letterSpacing: 1, cursor: 'pointer', userSelect: 'none',
+    color: active ? C.text : C.dim,
+    borderBottom: `2px solid ${active ? C.accent : 'transparent'}`,
+    '&:hover': { color: C.text },
+  }}>{children}</Box>
+);
+
+const AlertBadge = ({ keyword, onDismiss }: { keyword: string; onDismiss?: () => void }) => (
+  <Box onClick={onDismiss} title={onDismiss ? 'dismiss alert' : undefined}
+    sx={{
+      display: 'inline-flex', alignItems: 'center', gap: 0.5,
+      px: 1, py: 0.35, background: C.redBadge, color: '#fff',
+      borderRadius: 0.75, fontFamily: MONO, fontSize: 11, fontWeight: 800,
+      letterSpacing: 1, textTransform: 'uppercase', cursor: onDismiss ? 'pointer' : 'default',
+      boxShadow: '0 0 0 1px rgba(0,0,0,.35), 0 2px 6px rgba(217,44,44,.35)',
+    }}>
+    {keyword}
+  </Box>
+);
+
+// ── SCENE LOG (VLM captions) + per-camera watch-word editor ───────────────────
+const CaptionsPanel = ({ cam }: { cam: Cam }) => {
   useSubscribe('cam_captions', cam._id);
-  useSubscribe('caption_alerts', { source: cam._id, seen: false }, 5);
   const doc = useFind(() => CamCaptionCollection.find({ _id: cam._id }))[0];
   const items: { t: number; text: string }[] = doc?.items || [];
-  const alerts = useFind(() => CaptionAlertsCollection.find(
-    { source: cam._id, seen: false }, { sort: { timestamp: -1 }, limit: 1 }))[0];
 
   const scrollRef = React.useRef<HTMLDivElement>(null);
   React.useEffect(() => {
@@ -67,10 +261,7 @@ const CaptionBox = ({ cam }: { cam: Cam }) => {
   const [kw, setKw] = React.useState<string[]>(cam.captionKeywords || []);
   const [draft, setDraft] = React.useState('');
   React.useEffect(() => { setKw(cam.captionKeywords || []); }, [cam._id]);
-  const saveKw = (next: string[]) => {
-    setKw(next);
-    Meteor.call('setCaptionKeywords', cam._id, next);
-  };
+  const saveKw = (next: string[]) => { setKw(next); Meteor.call('setCaptionKeywords', cam._id, next); };
   const addKw = () => {
     const v = draft.trim().toLowerCase();
     if (v && !kw.includes(v)) saveKw([...kw, v]);
@@ -79,425 +270,336 @@ const CaptionBox = ({ cam }: { cam: Cam }) => {
   const hits = (text: string) =>
     kw.some((k) => new RegExp(`\\b${k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(text));
 
+  const [fontPx, bumpFont] = useCaptionFont();
+
   return (
-    <Box sx={{ px: 1, py: 0.5, background: 'rgba(18,18,20,.9)', color: '#ddd' }}>
-      <Stack direction="row" alignItems="center" spacing={1}>
-        <Typography sx={{ fontSize: 10, color: '#8ab4ff', letterSpacing: .5 }}>SCENE DESCRIPTION</Typography>
-        {alerts && (
-          <Chip size="small" color="error" label={`⚠ ${alerts.keyword}`}
-            onDelete={() => Meteor.call('markCaptionAlertSeen', alerts._id)}
-            sx={{ height: 18, fontSize: 10 }} />
-        )}
-      </Stack>
+    <Box sx={{ px: 1.25, pt: 1, pb: 1.25 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', mb: 0.5 }}>
+        <Typography sx={{ fontSize: 9, letterSpacing: 1.5, color: C.label, fontFamily: MONO }}>
+          SCENE LOG
+        </Typography>
+        <Box sx={{ flex: 1 }} />
+        <IconButton size="small" title="smaller captions" onClick={() => bumpFont(-1)}
+          disabled={fontPx <= CAPTION_FONT_MIN}
+          sx={{ color: C.dim, p: 0.25, '&:hover': { color: C.text }, '&.Mui-disabled': { color: C.borderSoft } }}>
+          <TextDecreaseIcon sx={{ fontSize: 15 }} />
+        </IconButton>
+        <IconButton size="small" title="larger captions" onClick={() => bumpFont(1)}
+          disabled={fontPx >= CAPTION_FONT_MAX}
+          sx={{ color: C.dim, p: 0.25, '&:hover': { color: C.text }, '&.Mui-disabled': { color: C.borderSoft } }}>
+          <TextIncreaseIcon sx={{ fontSize: 15 }} />
+        </IconButton>
+      </Box>
       <Box ref={scrollRef} sx={{
-        height: 96, overflowY: 'auto', mt: 0.5, fontSize: 11, lineHeight: 1.35,
-        fontFamily: 'ui-monospace, monospace',
+        height: 96, overflowY: 'auto', fontSize: fontPx, lineHeight: 1.45, fontFamily: MONO,
+        pr: 0.5,
       }}>
         {items.length === 0 && (
-          <Typography sx={{ fontSize: 11, color: '#666', fontStyle: 'italic' }}>
+          <Typography sx={{ fontSize: 'inherit', color: C.dim, fontStyle: 'italic', fontFamily: MONO }}>
             waiting for captions…
           </Typography>
         )}
         {items.map((it, i) => (
-          <Box key={i} sx={{ color: hits(it.text) ? '#ff6b6b' : '#ddd' }}>
-            <span style={{ color: '#666' }}>{new Date(it.t).toLocaleTimeString()} </span>
-            {it.text}
+          <Box key={i} sx={{ display: 'flex', gap: 1, mb: 0.4, fontSize: 'inherit' }}>
+            <span style={{ color: C.dim, flexShrink: 0 }}>
+              {new Date(it.t).toLocaleTimeString([], { hour12: false })}
+            </span>
+            <span style={{ color: hits(it.text) ? C.red : C.text }}>{it.text}</span>
           </Box>
         ))}
       </Box>
-      <Stack direction="row" flexWrap="wrap" gap={0.3} sx={{ mt: 0.5 }}>
-        {kw.map((k) => (
-          <Chip key={k} label={k} size="small" onDelete={() => saveKw(kw.filter((x) => x !== k))}
-            sx={{ height: 18, fontSize: 10 }} />
-        ))}
-      </Stack>
+      {kw.length > 0 && (
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 0.75 }}>
+          {kw.map((k) => (
+            <Box key={k} sx={{
+              display: 'inline-flex', alignItems: 'center', gap: 0.25,
+              px: 0.75, py: 0.15, border: `1px solid ${C.border}`, borderRadius: 0.75,
+              fontFamily: MONO, fontSize: 10, color: C.text,
+            }}>
+              {k}
+              <CloseIcon onClick={() => saveKw(kw.filter((x) => x !== k))}
+                sx={{ fontSize: 12, cursor: 'pointer', color: C.dim, '&:hover': { color: C.red } }} />
+            </Box>
+          ))}
+        </Box>
+      )}
       <TextField
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addKw(); } }}
-        placeholder="add watch-word (fall, fight, gun)…"
+        placeholder="add watch-word — fall, fight, gun…"
         variant="standard" fullWidth
-        InputProps={{ sx: { fontSize: 11, color: '#ddd' } }}
-        sx={{ mt: 0.3 }}
+        InputProps={{ disableUnderline: true, sx: { fontSize: 11, color: C.text, fontFamily: MONO } }}
+        sx={{
+          mt: 1, px: 1, py: 0.5, background: C.panel2,
+          border: `1px solid ${C.borderSoft}`, borderRadius: 0.75,
+          '& input::placeholder': { color: C.dim, opacity: 1 },
+        }}
       />
     </Box>
   );
 };
 
-import FullscreenIcon from '@mui/icons-material/Fullscreen';
-import FullscreenExitIcon from '@mui/icons-material/FullscreenExit';
+// ── SIDEBAR: in-frame faces + line-crossing events ────────────────────────────
+const SidebarPanel = ({ cam, faces }: { cam: Cam; faces: any[] }) => {
+  useSubscribe('cam_events', cam._id || '', 10);
+  const events = useFind(() => CamEventsCollection.find(
+    { source: cam._id }, { sort: { timestamp: -1 }, limit: 10 }));
+  const status = useFind(() => CamLiveStatusCollection.find({ _id: cam._id }))[0];
+  const lineLabel = (lineId: string) => cam.lines?.find((l) => l.lineId === lineId)?.label || lineId;
+  const zoneLabel = (zoneId: string) => cam.overlayZones?.find((z) => z.zoneId === zoneId)?.label || zoneId;
+  const zoneCounts = Object.entries(status?.zoneCounts ?? {});
 
-// const useProxiedWHEP = (streamPath: string, videoRef: React.RefObject<HTMLVideoElement>) => {
-//     useEffect(() => {
-//         let pc: RTCPeerConnection | null = null;
-//         let sessionUrl: string | null = null;
-//         let offerData: any = null;
-//         let queuedCandidates: RTCIceCandidate[] = [];
-
-//         async function start() {
-//             // 1. Get ICE servers via OPTIONS
-//             const iceServers: RTCIceServer[] = await Meteor.callAsync('whepOptions', streamPath);
-
-//             // 2. Create PeerConnection
-//             pc = new RTCPeerConnection({
-//                 iceServers,
-//             });
-
-//             pc.addTransceiver('video', { direction: 'recvonly' });
-//             pc.addTransceiver('audio', { direction: 'recvonly' });
-
-//             pc.ontrack = (evt) => {
-//                 if (videoRef.current) {
-//                     videoRef.current.srcObject = evt.streams[0];
-//                 }
-//             };
-
-//             pc.onicecandidate = (evt) => {
-//                 if (evt.candidate) {
-//                     if (!sessionUrl) {
-//                         queuedCandidates.push(evt.candidate);
-//                     } else {
-//                         sendLocalCandidates([evt.candidate]);
-//                     }
-//                 }
-//             };
-
-//             // 3. Create offer
-//             const offer = await pc.createOffer();
-//             await pc.setLocalDescription(offer);
-
-//             // 4. POST offer, get answer and sessionUrl
-//             const { sdpAnswer, sessionUrl: returnedSessionUrl } = await Meteor.callAsync('whepPostOffer', streamPath, offer.sdp);
-//             sessionUrl = returnedSessionUrl;
-//             if (offer.sdp) {
-//                 offerData = parseOffer(offer.sdp);
-//             } else {
-//                 throw new Error('Offer SDP is undefined');
-//             }
-
-//             // 5. Set remote description
-//             await pc.setRemoteDescription({ type: 'answer', sdp: sdpAnswer });
-
-//             // 6. Send any queued ICE candidates
-//             if (queuedCandidates.length > 0) {
-//                 sendLocalCandidates(queuedCandidates);
-//                 queuedCandidates = [];
-//             }
-//         }
-
-//         function parseOffer(sdp: string) {
-//             const ret: { iceUfrag: string; icePwd: string; medias: string[] } = {
-//                 iceUfrag: '',
-//                 icePwd: '',
-//                 medias: [],
-//             };
-//             for (const line of sdp.split('\r\n')) {
-//                 if (line.startsWith('m=')) {
-//                     ret.medias.push(line.slice('m='.length));
-//                 } else if (ret.iceUfrag === '' && line.startsWith('a=ice-ufrag:')) {
-//                     ret.iceUfrag = line.slice('a=ice-ufrag:'.length);
-//                 } else if (ret.icePwd === '' && line.startsWith('a=ice-pwd:')) {
-//                     ret.icePwd = line.slice('a=ice-pwd:'.length);
-//                 }
-//             }
-//             return ret;
-//         }
-
-//         async function sendLocalCandidates(candidates: RTCIceCandidate[]) {
-//             if (!sessionUrl || !offerData) return;
-//             const frag = generateSdpFragment(offerData, candidates);
-//             await Meteor.callAsync('whepPatchCandidates', sessionUrl, frag);
-//         }
-
-//         function generateSdpFragment(od: any, candidates: RTCIceCandidate[]) {
-//             const candidatesByMedia: { [mid: number]: RTCIceCandidate[] } = {};
-//             for (const candidate of candidates) {
-//                 const mid = candidate.sdpMLineIndex!;
-//                 if (!candidatesByMedia[mid]) candidatesByMedia[mid] = [];
-//                 candidatesByMedia[mid].push(candidate);
-//             }
-//             let frag = `a=ice-ufrag:${od.iceUfrag}\r\n` + `a=ice-pwd:${od.icePwd}\r\n`;
-//             let mid = 0;
-//             for (const media of od.medias) {
-//                 if (candidatesByMedia[mid]) {
-//                     frag += `m=${media}\r\n` + `a=mid:${mid}\r\n`;
-//                     for (const candidate of candidatesByMedia[mid]) {
-//                         frag += `a=${candidate.candidate}\r\n`;
-//                     }
-//                 }
-//                 mid++;
-//             }
-//             return frag;
-//         }
-
-//         start();
-
-//         return () => {
-//             if (pc) {
-//                 pc.getSenders().forEach(sender => sender.track && sender.track.stop());
-//                 pc.close();
-//             }
-//             if (sessionUrl) {
-//                 Meteor.call('whepDeleteSession', sessionUrl);
-//             }
-//         };
-//     }, [streamPath, videoRef]);
-// };
-
-// WebRTC livestream: SDP offer/answer over DDP ('webrtcOffer' method, see
-// server/webrtcRelay.ts), media over a normal RTCPeerConnection.  The server
-// forwards the cam process's H.264 RTP untouched — no transcoding anywhere.
-const useWebRtcLive = (
-    camId: string,
-    videoRef: React.RefObject<HTMLVideoElement>,
-    epoch: number,
-    onState: (s: 'connecting' | 'live' | 'error') => void,
-) => {
-    React.useEffect(() => {
-        if (!camId) return;
-        let pc: RTCPeerConnection | null = null;
-        let retry: ReturnType<typeof setTimeout> | null = null;
-        let disposed = false;
-
-        const start = async () => {
-            if (disposed) return;
-            onState('connecting');
-            pc = new RTCPeerConnection();
-            pc.addTransceiver('video', { direction: 'recvonly' });
-            pc.ontrack = (evt) => {
-                if (videoRef.current) videoRef.current.srcObject = evt.streams[0];
-            };
-            pc.onconnectionstatechange = () => {
-                if (!pc || disposed) return;
-                if (pc.connectionState === 'connected') onState('live');
-                if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
-                    onState('error');
-                    pc.close(); pc = null;
-                    retry = setTimeout(start, 3000);
-                }
-            };
-
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-            // non-trickle: wait for ICE gathering so the offer carries candidates
-            await new Promise<void>((resolve) => {
-                if (pc!.iceGatheringState === 'complete') return resolve();
-                const timer = setTimeout(resolve, 2000);
-                pc!.onicegatheringstatechange = () => {
-                    if (pc?.iceGatheringState === 'complete') { clearTimeout(timer); resolve(); }
-                };
-            });
-
-            try {
-                const answerSdp: string = await Meteor.callAsync(
-                    'webrtcOffer', camId, pc!.localDescription!.sdp);
-                if (disposed || !pc) return;
-                await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
-            } catch (e) {
-                console.error('webrtcOffer failed:', e);
-                onState('error');
-                pc?.close(); pc = null;
-                retry = setTimeout(start, 5000);
-            }
-        };
-        start();
-        return () => {
-            disposed = true;
-            if (retry) clearTimeout(retry);
-            pc?.close();
-        };
-    }, [camId, epoch]);
-};
-
-// Live status chips + recent line-crossing events for one cam.
-// Data arrives from the perception engine via redis 'cam_events' → CamLiveStatus / CamEvents.
-const CamLiveInfo = ({ cam }: { cam: Cam }) => {
-    useSubscribe('cam_live_status');
-    useSubscribe('cam_events', cam._id || '', 10);
-    const status = useFind(() => CamLiveStatusCollection.find({ _id: cam._id }))[0];
-    const events = useFind(() => CamEventsCollection.find(
-        { source: cam._id }, { sort: { timestamp: -1 }, limit: 10 }));
-
-    const lineLabel = (lineId: string) =>
-        cam.lines?.find(l => l.lineId === lineId)?.label || lineId;
-    const zoneLabel = (zoneId: string) =>
-        cam.overlayZones?.find(z => z.zoneId === zoneId)?.label || zoneId;
-
-    return (
-        <Box sx={{ p: 0.5 }}>
-            <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5 }}>
-                <Chip size="small" label={`${status?.fps?.toFixed(1) ?? '—'} fps`} />
-                <Chip size="small" color={status?.persons ? 'primary' : 'default'}
-                      label={`persons ${status?.persons ?? '—'}`} />
-                {Object.entries(status?.zoneCounts ?? {}).map(([zid, cnt]) => (
-                    <Chip key={zid} size="small"
-                          color={cnt > 0 ? 'warning' : 'default'}
-                          label={`${zoneLabel(zid)}: ${cnt}`} />
-                ))}
-                {Object.entries(status?.zoneMotion ?? {}).map(([zid, score]) => (
-                    <Chip key={`m-${zid}`} size="small" variant="outlined"
-                          label={`${zoneLabel(zid)} motion ${score.toFixed(1)}`} />
-                ))}
-            </Stack>
-            {events.length > 0 && (
-                <Box sx={{ mt: 0.5, maxHeight: 96, overflowY: 'auto' }}>
-                    {events.map(ev => (
-                        <Typography key={ev._id} variant="caption" component="div" sx={{ color: 'text.secondary' }}>
-                            {ev.timestamp.toLocaleTimeString()} — P#{ev.tid} crossed «{lineLabel(ev.line)}» → {ev.to}
-                        </Typography>
-                    ))}
-                </Box>
-            )}
-        </Box>
-    );
-};
-
-export const LiveCamPlayer = ({ cam, sx={} }: { cam: Cam, sx?:{[x:string]:any} }) => {
-    // const videoRef = useRef<HTMLVideoElement>(null);
-    // useProxiedWHEP(cam._id ||'', videoRef);
-    // const[camPoster, setCamPoster] = React.useState<string | null>(null);
-    // useEffect(() => {
-    //     Meteor.callAsync('validateRtspLink', cam.streamurl).then((poster: string) => {
-    //         setCamPoster(poster);
-    //     }
-    //     ).catch((error: any) => {
-    //         console.error('Error validating RTSP link:', error);
-    //         setCamPoster(null);
-    //     }
-    //     );
-    // }, [cam.streamurl]);
-    const [message, setMessage] = React.useState<string | null>(null)
-    const [streamEpoch, setStreamEpoch] = React.useState(0)   // bump to force stream reconnect
-    const [streamState, setStreamState] = React.useState<'connecting' | 'live' | 'error'>('connecting')
-    const videoRef = React.useRef<HTMLVideoElement>(null)
-    const videoBoxRef = React.useRef<HTMLDivElement>(null)
-    const [isFullscreen, setIsFullscreen] = React.useState(false)
-    const [showOverlay, setShowOverlay] = React.useState(true)
-    const [showCaptions, setShowCaptions] = React.useState(true)
-    useWebRtcLive(cam._id || '', videoRef, streamEpoch, setStreamState)
-    React.useEffect(() => {
-        const onChange = () => setIsFullscreen(document.fullscreenElement === videoBoxRef.current)
-        document.addEventListener('fullscreenchange', onChange)
-        return () => document.removeEventListener('fullscreenchange', onChange)
-    }, [])
-    const toggleFullscreen = () => {
-        if (document.fullscreenElement) {
-            document.exitFullscreen().catch(() => {})
-        } else {
-            videoBoxRef.current?.requestFullscreen().catch(() => {})
-        }
-    }
-    return (
-        <Paper key={cam._id} sx={{ p: 1, minWidth: 320, ...sx, position:'relative' }}>
-            <Typography variant='subtitle2' sx={{backgroundColor:'#3d3d3d', color:'#fff', textAlign:'center', p:1}} >{cam.name}</Typography>
-            <IconButton 
-                onClick={
-                    async()=>{
-                        await Meteor.callAsync('restartCamHandler', cam._id || '');
-                        setMessage('Cam prrocess restarted')
-                    }
-                }
-                color='info'
-                sx={{position:'absolute', top:0, right:0, m:1}}
-            >
-                <RestartAltIcon />
-            </IconButton>
-            {/* <video
-                ref={videoRef}
-                autoPlay
-                playsInline
-                muted
-                controls
-                poster={`data:image/jpeg;base64,${camPoster}` || 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8//8/AwAI/wH+9Q4AAAAASUVORK5CYII='}
-                style={{ width: '100%', background: '#000' }}
-            /> */}
-            <Box ref={videoBoxRef} sx={{
-                position: 'relative',
-                width: '100%',
-                paddingTop: '49.63%', // DS output is 2176×1080 (video + sidebar)
-                overflow: 'hidden',
-                backgroundColor: '#000',
+  return (
+    <Box sx={{ px: 1.25, pt: 1, pb: 1.25 }}>
+      <Typography sx={{ fontSize: 9, letterSpacing: 1.5, color: C.label, fontFamily: MONO, mb: 0.5 }}>
+        FACES IN FRAME · {faces.length}
+      </Typography>
+      {faces.length === 0 ? (
+        <Typography sx={{ fontSize: 11, color: C.dim, fontStyle: 'italic', fontFamily: MONO }}>
+          no faces in frame
+        </Typography>
+      ) : (
+        <Box sx={{ display: 'flex', gap: 0.5, overflowX: 'auto', pb: 0.5 }}>
+          {faces.map((f, i) => (
+            <Box key={i} sx={{
+              position: 'relative', flex: '0 0 auto', width: 46, height: 46,
+              borderRadius: 0.75, overflow: 'hidden',
+              border: `1px solid ${f.frontal ? C.green : C.border}`,
             }}>
-            {/* processed DeepStream output via WebRTC (server/webrtcRelay.ts) */}
-            <video
-                ref={videoRef}
-                autoPlay
-                playsInline
-                muted
-                style={{
-                    position: 'absolute',
-                    top: 0,
-                    left: 0,
-                    width: '100%',
-                    height: '100%',
-                    objectFit: 'contain',
-                }}
-                />
-            {/* boxes/pose/zones/lines are burned into the DeepStream video now — sidebar only */}
-            {showOverlay && <OverlaySidebar cam={cam} />}
-            {streamState !== 'live' && (
-                <Typography variant="caption" sx={{
-                    position: 'absolute', top: '50%', left: '50%',
-                    transform: 'translate(-50%,-50%)', color: '#888',
-                }} onClick={() => setStreamEpoch(e => e + 1)}>
-                    {streamState === 'connecting' ? 'connecting…' : 'stream unavailable — click to retry'}
-                </Typography>
-            )}
-            <Button size="small" onClick={() => setShowOverlay(v => !v)}
-                sx={{ position:'absolute', bottom:4, left:4, minWidth:0, px:1,
-                      color:'#fff', backgroundColor:'rgba(0,0,0,.45)', fontSize:10,
-                      '&:hover':{ backgroundColor:'rgba(0,0,0,.7)' } }}>
-                {showOverlay ? 'sidebar ✓' : 'sidebar'}
-            </Button>
-            <Button size="small" onClick={() => setShowCaptions(v => !v)}
-                sx={{ position:'absolute', bottom:4, left:70, minWidth:0, px:1,
-                      color:'#fff', backgroundColor:'rgba(0,0,0,.45)', fontSize:10,
-                      '&:hover':{ backgroundColor:'rgba(0,0,0,.7)' } }}>
-                {showCaptions ? 'captions ✓' : 'captions'}
-            </Button>
-            <IconButton
-                onClick={toggleFullscreen}
-                size="small"
-                sx={{
-                    position: 'absolute', bottom: 4, right: 4,
-                    color: '#fff', backgroundColor: 'rgba(0,0,0,0.45)',
-                    '&:hover': { backgroundColor: 'rgba(0,0,0,0.7)' },
-                }}
-            >
-                {isFullscreen ? <FullscreenExitIcon /> : <FullscreenIcon />}
-            </IconButton>
+              <img src={`data:image/jpeg;base64,${f.thumb}`}
+                style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
             </Box>
-            {showCaptions && <CaptionBox cam={cam} />}
-            <CamLiveInfo cam={cam} />
-             <Snackbar
-                open={!!message}
-                autoHideDuration={3000}
-                onClose={()=>{setMessage(null)}}
-                message={message || ''}
-            />
-        </Paper>
-    );
+          ))}
+        </Box>
+      )}
+
+      {zoneCounts.length > 0 && (
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 1 }}>
+          {zoneCounts.map(([zid, cnt]) => (
+            <StatChip key={zid} label={zoneLabel(zid).toUpperCase()} value={cnt as number}
+              color={(cnt as number) > 0 ? C.red : C.text} />
+          ))}
+        </Box>
+      )}
+
+      <Box sx={{ mt: 1, height: 84, overflowY: 'auto', fontFamily: MONO }}>
+        {events.length === 0 && (
+          <Typography sx={{ fontSize: 11, color: C.dim, fontStyle: 'italic', fontFamily: MONO }}>
+            no recent crossings
+          </Typography>
+        )}
+        {events.map((ev) => (
+          <Box key={ev._id} sx={{ display: 'flex', gap: 1, mb: 0.35, fontSize: 11 }}>
+            <span style={{ color: C.dim, flexShrink: 0 }}>
+              {ev.timestamp.toLocaleTimeString([], { hour12: false })}
+            </span>
+            <span style={{ color: C.text }}>P#{ev.tid} → «{lineLabel(ev.line)}» {ev.to}</span>
+          </Box>
+        ))}
+      </Box>
+    </Box>
+  );
 };
 
+// ── one camera card ───────────────────────────────────────────────────────────
+export const LiveCamPlayer = ({ cam, sx = {}, embedded = false }: { cam: Cam; sx?: { [x: string]: any }; embedded?: boolean }) => {
+  const [message, setMessage] = React.useState<string | null>(null);
+  const [streamEpoch, setStreamEpoch] = React.useState(0);
+  const [streamState, setStreamState] = React.useState<'connecting' | 'live' | 'error'>('connecting');
+  const [tab, setTab] = React.useState<'sidebar' | 'captions'>('captions');
+  const [popped, setPopped] = React.useState(false);
+  const videoRef = React.useRef<HTMLVideoElement>(null);
+  const videoBoxRef = React.useRef<HTMLDivElement>(null);
+  const [isFullscreen, setIsFullscreen] = React.useState(false);
+
+  useWebRtcLive(cam._id || '', videoRef, streamEpoch, setStreamState);
+
+  // live per-frame overlay + status + active keyword alert
+  useSubscribe('cam_overlay', cam._id);
+  useSubscribe('cam_live_status');
+  useSubscribe('caption_alerts', { source: cam._id, seen: false }, 5);
+  const ov = useFind(() => CamOverlayCollection.find({ _id: cam._id }))[0];
+  const status = useFind(() => CamLiveStatusCollection.find({ _id: cam._id }))[0];
+  const alert = useFind(() => CaptionAlertsCollection.find(
+    { source: cam._id, seen: false }, { sort: { timestamp: -1 }, limit: 1 }))[0];
+
+  const faces = useFreshFaces(ov);
+  const persons = status?.persons ?? ov?.persons?.length ?? 0;
+  const fps = (ov?.fps ?? status?.fps ?? 0);
+  const isLive = streamState === 'live';
+
+  React.useEffect(() => {
+    const onChange = () => setIsFullscreen(document.fullscreenElement === videoBoxRef.current);
+    document.addEventListener('fullscreenchange', onChange);
+    return () => document.removeEventListener('fullscreenchange', onChange);
+  }, []);
+  const toggleFullscreen = () => {
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    else videoBoxRef.current?.requestFullscreen().catch(() => {});
+  };
+
+  return (
+    <Box key={cam._id} sx={{
+      background: C.panel, border: `1px solid ${C.border}`, borderRadius: 1.5,
+      overflow: 'hidden', display: 'flex', flexDirection: 'column', ...sx,
+    }}>
+      {/* card header */}
+      <Box sx={{
+        display: 'flex', alignItems: 'center', gap: 1, px: 1.25, py: 0.9,
+        borderBottom: `1px solid ${C.borderSoft}`,
+      }}>
+        <Box sx={{
+          width: 7, height: 7, borderRadius: '50%', flexShrink: 0,
+          background: isLive ? C.green : C.dim,
+          boxShadow: isLive ? `0 0 6px ${C.green}` : 'none',
+        }} />
+        <Typography sx={{ fontFamily: MONO, fontSize: 12, fontWeight: 700, color: C.text, letterSpacing: 0.5, textTransform: 'uppercase' }}>
+          {cam.name}
+        </Typography>
+        {cam.zone && (
+          <Typography sx={{ fontFamily: MONO, fontSize: 10, color: C.label, letterSpacing: 1, textTransform: 'uppercase' }}>
+            {cam.zone}
+          </Typography>
+        )}
+        <Box sx={{ flex: 1 }} />
+        <Typography sx={{ fontFamily: MONO, fontSize: 11, color: C.dim }}>
+          {fps.toFixed(1)} FPS
+        </Typography>
+        {!embedded && (
+          <IconButton size="small" title={popped ? 'pop-out open' : 'pop out to window'}
+            onClick={() => setPopped(true)} disabled={popped}
+            sx={{ color: popped ? C.accent : C.dim, p: 0.4, '&:hover': { color: C.text } }}>
+            <OpenInNewIcon sx={{ fontSize: 15 }} />
+          </IconButton>
+        )}
+        <IconButton size="small" title="restart camera"
+          onClick={async () => { await Meteor.callAsync('restartCamHandler', cam._id || ''); setMessage('Cam process restarted'); }}
+          sx={{ color: C.dim, p: 0.4, '&:hover': { color: C.text } }}>
+          <RestartAltIcon sx={{ fontSize: 16 }} />
+        </IconButton>
+      </Box>
+
+      {/* pop-out: same tile rendered into a chromeless window */}
+      {popped && (
+        <PopOut title={`${cam.name}${cam.zone ? ' · ' + cam.zone : ''}`} onClose={() => setPopped(false)}>
+          <LiveCamPlayer cam={cam} embedded sx={{ height: '100vh', borderRadius: 0, border: 'none' }} />
+        </PopOut>
+      )}
+
+      {/* video tile */}
+      <Box ref={videoBoxRef} sx={{
+        position: 'relative', width: '100%', paddingTop: '56.25%',
+        overflow: 'hidden', background: '#000',
+      }}>
+        <video ref={videoRef} autoPlay playsInline muted
+          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain' }} />
+
+        {/* alert badge (top-left) */}
+        {alert && (
+          <Box sx={{ position: 'absolute', top: 8, left: 8, zIndex: 2 }}>
+            <AlertBadge keyword={alert.keyword} onDismiss={() => Meteor.call('markCaptionAlertSeen', alert._id)} />
+          </Box>
+        )}
+
+        {/* live counts (top-right) */}
+        <Box sx={{ position: 'absolute', top: 8, right: 8, zIndex: 2, display: 'flex', flexDirection: 'column', gap: 0.5, alignItems: 'flex-end' }}>
+          <StatChip label="PERSONS" value={persons} color={persons ? C.text : C.dim} />
+          <StatChip label="FACES" value={faces.length} color={faces.length ? C.text : C.dim} />
+        </Box>
+
+        {!isLive && (
+          <Typography onClick={() => setStreamEpoch((e) => e + 1)}
+            sx={{
+              position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)',
+              color: C.dim, fontFamily: MONO, fontSize: 12, cursor: 'pointer', textAlign: 'center',
+            }}>
+            {streamState === 'connecting' ? 'connecting…' : 'stream unavailable — click to retry'}
+          </Typography>
+        )}
+      </Box>
+
+      {/* tabs */}
+      <Box sx={{ display: 'flex', alignItems: 'center', borderBottom: `1px solid ${C.borderSoft}`, background: C.panel2 }}>
+        <TabButton active={tab === 'sidebar'} onClick={() => setTab('sidebar')}>SIDEBAR</TabButton>
+        <TabButton active={tab === 'captions'} onClick={() => setTab('captions')}>CAPTIONS</TabButton>
+        <Box sx={{ flex: 1 }} />
+        <IconButton size="small" onClick={toggleFullscreen}
+          sx={{ color: C.dim, p: 0.4, mr: 0.5, '&:hover': { color: C.text } }}>
+          {isFullscreen ? <FullscreenExitIcon sx={{ fontSize: 16 }} /> : <FullscreenIcon sx={{ fontSize: 16 }} />}
+        </IconButton>
+      </Box>
+
+      {/* active panel */}
+      {tab === 'captions' ? <CaptionsPanel cam={cam} /> : <SidebarPanel cam={cam} faces={faces} />}
+
+      <Snackbar open={!!message} autoHideDuration={3000} onClose={() => setMessage(null)} message={message || ''} />
+    </Box>
+  );
+};
+
+// ── page: aggregate header + camera grid ──────────────────────────────────────
 const LivestreamRenderer = () => {
-    useSubscribe('cams');
-    const myCams = useFind(()=>CamsCollection.find({}));
+  useSubscribe('cams');
+  useSubscribe('cam_live_status');
+  useSubscribe('caption_alerts_unseen');
+  const cams = useFind(() => CamsCollection.find({}));
+  const statuses = useFind(() => CamLiveStatusCollection.find({}));
+  const unseenAlerts = useFind(() => CaptionAlertsCollection.find({ seen: false }));
+  const clock = useClock();
 
-    return (
-        <Stack direction="row" sx={{ flexWrap: 'wrap'}}>
-            {myCams.map(cam => (
-                <LiveCamPlayer key={cam._id} cam={cam} sx={{maxWidth:'480px', m:1}}/>
-            ))}
-        </Stack>
-    );
-}
+  const totalPersons = statuses.reduce((s, x) => s + (x.persons || 0), 0);
+  const liveCount = statuses.filter((s) => (s.fps || 0) > 0).length || cams.length;
+  const zones = Array.from(new Set(cams.map((c) => c.zone).filter(Boolean))) as string[];
+  const subtitle = zones.length ? zones.join(' · ') : `${cams.length} CAMERAS`;
 
-const LiveStreamApp:AppType ={
-    appName: 'Live Stream',
-    render: LivestreamRenderer,
-    appIcon: <Icon />
-}
+  return (
+    <Box sx={{ background: C.bg, minHeight: '100%', color: C.text }}>
+      {/* top bar */}
+      <Box sx={{
+        display: 'flex', alignItems: 'center', gap: 2, px: 2.5, py: 1.5,
+        borderBottom: `1px solid ${C.border}`, position: 'sticky', top: 0, zIndex: 5,
+        background: 'rgba(10,10,12,.92)', backdropFilter: 'blur(6px)',
+      }}>
+        <Typography sx={{ fontWeight: 700, fontSize: 16, color: C.text }}>Live Stream</Typography>
+        <Typography sx={{ fontFamily: MONO, fontSize: 11, color: C.label, letterSpacing: 1.5, textTransform: 'uppercase' }}>
+          {subtitle}
+        </Typography>
+        <Box sx={{
+          display: 'inline-flex', alignItems: 'center', gap: 0.75, px: 1, py: 0.4,
+          border: `1px solid ${C.border}`, borderRadius: 3,
+        }}>
+          <Box sx={{ width: 7, height: 7, borderRadius: '50%', background: C.green, boxShadow: `0 0 6px ${C.green}` }} />
+          <Typography sx={{ fontFamily: MONO, fontSize: 11, color: C.text, letterSpacing: 0.5 }}>{liveCount} LIVE</Typography>
+        </Box>
+        <Box sx={{ flex: 1 }} />
+        <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.75, fontFamily: MONO }}>
+          <Typography sx={{ fontSize: 10, letterSpacing: 1, color: C.label }}>PERSONS</Typography>
+          <Typography sx={{ fontSize: 14, fontWeight: 700, color: C.text }}>{totalPersons}</Typography>
+        </Box>
+        <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.75, fontFamily: MONO }}>
+          <Typography sx={{ fontSize: 10, letterSpacing: 1, color: C.label }}>ALERTS</Typography>
+          <Typography sx={{ fontSize: 14, fontWeight: 700, color: unseenAlerts.length ? C.red : C.text }}>
+            {unseenAlerts.length}
+          </Typography>
+        </Box>
+        <Typography sx={{ fontFamily: MONO, fontSize: 13, color: C.text, letterSpacing: 1, ml: 1 }}>{clock}</Typography>
+      </Box>
+
+      {/* camera grid */}
+      <Box sx={{
+        display: 'grid', gap: 2, p: 2.5,
+        gridTemplateColumns: 'repeat(auto-fill, minmax(440px, 1fr))',
+      }}>
+        {cams.map((cam) => <LiveCamPlayer key={cam._id} cam={cam} />)}
+      </Box>
+    </Box>
+  );
+};
+
+const LiveStreamApp: AppType = {
+  appName: 'Live Stream',
+  render: LivestreamRenderer,
+  appIcon: <Icon />,
+};
 export default LiveStreamApp;
-
-
-
