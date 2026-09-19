@@ -12,7 +12,8 @@
     "test:audit": "npm run test:unit && npm run test:static && npm run test:security",
     "test:e2e": "playwright test tests/e2e",
     "seed:dev": "node scripts/seed-dev-data.mjs",
-    "seed:clean": "node scripts/seed-dev-data.mjs --clean"
+    "seed:clean": "node scripts/seed-dev-data.mjs --clean",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@babel/runtime": "^7.23.5",
