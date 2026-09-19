@@ -106,6 +106,9 @@ const ScenarioArchiveRenderer = () => {
             })} />
         } label="unseen only" />
         <DateRangePicker
+            // keep the calendar inside the screen: these windows often sit near
+            // the right edge, where the default placement puts it out of view
+            preventOverflow
           placeholder="Time range" format="yyyy-MM-dd HH:mm" showMeridiem={false}
           value={filter.triggeredAt ? [filter.triggeredAt.$gte, filter.triggeredAt.$lte] : null}
           onChange={(range) => setF(prev => {
