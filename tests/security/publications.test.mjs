@@ -47,6 +47,51 @@ describe('publications reject anonymous subscribers', () => {
   }
 });
 
+describe('live camera feeds answer a signed-in subscriber', () => {
+  // cam_overlay and cam_captions poll redis rather than Mongo, and several
+  // subscribers now share one poller per camera. The shape to protect: the
+  // subscription completes and the initial document arrives, whether or not
+  // the perception engine is running (it usually is not, in development).
+  const USER = process.env.DESKPASS_TEST_USER || 'admin';
+  const PASS = process.env.DESKPASS_TEST_PASS || 'admin';
+
+  for (const [pub, collection] of [['cam_overlay', 'cam_overlay'], ['cam_captions', 'cam_captions'], ['onvifDevices', 'onvifdevices']]) {
+    test(`${pub} completes for a signed-in subscriber`, async () => {
+      const client = await anonymousClient();
+      try {
+        const login = await client.login(USER, PASS);
+        assert.ok(!login.error, `cannot sign in as ${USER}`);
+        const res = await client.subscribe(pub, pub === 'onvifDevices' ? [] : ['probe-cam-id']);
+        assert.ok(!res.timedOut, `"${pub}" never answered a signed-in subscriber`);
+        assert.ok(res.ok !== false || !res.error, `"${pub}" refused a signed-in subscriber: ${JSON.stringify(res.error)}`);
+        if (collection !== 'onvifdevices') {
+          assert.equal(client.received(collection).length, 1,
+            `"${pub}" should push exactly one document for the camera it was asked about`);
+        }
+      } finally {
+        client.close();
+      }
+    });
+  }
+
+  test('two subscribers can watch the same camera at once', async () => {
+    // The shared poller must serve both, not trip over the second join.
+    const a = await anonymousClient();
+    const b = await anonymousClient();
+    try {
+      await a.login(USER, PASS);
+      await b.login(USER, PASS);
+      const ra = await a.subscribe('cam_overlay', ['shared-probe-cam']);
+      const rb = await b.subscribe('cam_overlay', ['shared-probe-cam']);
+      assert.ok(!ra.timedOut && !rb.timedOut, 'a second subscriber to the same camera was left hanging');
+      assert.equal(a.received('cam_overlay').length, 1);
+      assert.equal(b.received('cam_overlay').length, 1);
+    } finally {
+      a.close(); b.close();
+    }
+  });
+});
+
 describe('publications that already guard correctly stay guarded', () => {
   // Regression cover: these were correct at audit time and must not regress.
   const NEEDS_FILTER = ['visitssummary', 'attendanceArchive', 'temporaryCards'];

@@ -871,8 +871,12 @@ VisitsSummaryCollection.rawCollection().createIndex({ 'source': 1, 'timestamp': 
     );
     await RolesCollection.insertAsync({role:'admin', userId:firstacc})
   }
-  const devices = await startProbe();
-  localOnvif = devices.map(d=>d as OnvifDevice)
+  // ONVIF discovery is no longer awaited here. It took seconds, and the
+  // publications and methods below are only registered once this callback
+  // reaches them — until then a connected client is told its perfectly valid
+  // method does not exist. Discovery now runs only while someone is watching
+  // the camera picker (see the onvifDevices publication).
+
   // Page sizes the server enforces regardless of what the client asks for.
   // `visits` keeps a high ceiling because the models screen legitimately pulls
   // every reference visit in one subscription.
@@ -926,22 +930,91 @@ VisitsSummaryCollection.rawCollection().createIndex({ 'source': 1, 'timestamp': 
     }
     return [];
   })
-  Meteor.setInterval(async()=>{
-    try{
+  // ONVIF discovery broadcasts on the local network. It used to run every ten
+  // seconds for the lifetime of the server, whether or not anyone was looking
+  // at the camera picker; now it runs only while that picker is open.
+  const ONVIF_PROBE_MS = Number(process.env.ONVIF_PROBE_MS || 15000);
+  // Do not tear discovery down the instant the last viewer leaves: opening a
+  // second screen, or a page reload, would otherwise thrash the UDP sockets
+  // the library binds for each probe.
+  const ONVIF_LINGER_MS = Number(process.env.ONVIF_LINGER_MS || 60000);
+
+  let onvifSubscribers = 0;
+  let onvifTimer: number | undefined;
+  let onvifStopTimer: number | undefined;
+  let onvifProbeInFlight = false;
+
+  async function probeOnvifOnce() {
+    // startProbe binds sockets; running two at once, or starting a new one
+    // before the previous finished, is asking for trouble.
+    if (onvifProbeInFlight) return;
+    onvifProbeInFlight = true;
+    try {
       const devices = await startProbe();
-      localOnvif = devices.map(d=>d as OnvifDevice)
-      await stopDiscovery()
-    }catch(e){
-      // Probing runs every 10s; a camera that is briefly unreachable is
-      // normal, but a persistent failure should be visible.
+      localOnvif = devices.map((d) => d as OnvifDevice);
+    } catch (e) {
+      // A camera that is briefly unreachable is normal; a persistent failure
+      // should still be visible.
       console.error('[ONVIF] discovery probe failed:', e instanceof Error ? e.message : e);
+    } finally {
+      // Always release the discovery sockets, including after a failure.
+      try { await stopDiscovery(); } catch { /* discovery was not running */ }
+      onvifProbeInFlight = false;
     }
-    
-  }, 10000)
-  Meteor.publish('onvifDevices', function(){
+  }
+
+  function startOnvifDiscovery() {
+    if (onvifStopTimer !== undefined) {
+      Meteor.clearTimeout(onvifStopTimer);
+      onvifStopTimer = undefined;
+    }
+    if (onvifTimer !== undefined) return;
+    void probeOnvifOnce();
+    onvifTimer = Meteor.setInterval(() => void probeOnvifOnce(), ONVIF_PROBE_MS);
+  }
+
+  function stopOnvifDiscovery() {
+    if (onvifTimer === undefined || onvifStopTimer !== undefined) return;
+    onvifStopTimer = Meteor.setTimeout(() => {
+      onvifStopTimer = undefined;
+      if (onvifSubscribers > 0) return;   // someone came back while we waited
+      if (onvifTimer !== undefined) {
+        Meteor.clearInterval(onvifTimer);
+        onvifTimer = undefined;
+      }
+    }, ONVIF_LINGER_MS);
+  }
+
+  Meteor.publish('onvifDevices', function () {
     if (!this.userId) return this.ready();
-    localOnvif.forEach(d=> this.added('onvifdevices', d.urn, {...d}))
-    this.ready()
+    const self: any = this;
+
+    onvifSubscribers += 1;
+    startOnvifDiscovery();
+
+    // Devices found before this subscription started, then anything discovery
+    // turns up afterwards. The old version pushed a one-off snapshot, so a
+    // camera found a second later never appeared until the screen reopened.
+    const sent = new Set<string>();
+    const flush = () => {
+      for (const d of localOnvif) {
+        if (sent.has(d.urn)) continue;
+        sent.add(d.urn);
+        self.added('onvifdevices', d.urn, { ...d });
+      }
+    };
+    flush();
+    self.ready();
+
+    const pushTimer = Meteor.setInterval(flush, 2000);
+    self.onStop(() => {
+      Meteor.clearInterval(pushTimer);
+      onvifSubscribers -= 1;
+      if (onvifSubscribers <= 0) {
+        onvifSubscribers = 0;
+        stopOnvifDiscovery();
+      }
+    });
   })
   Meteor.publish("zones", function () {
     if (!this.userId) return this.ready();
@@ -974,70 +1047,121 @@ VisitsSummaryCollection.rawCollection().createIndex({ 'source': 1, 'timestamp': 
     return CamLiveStatusCollection.find();
   });
 
-  // Per-frame overlay data for the annotated livestream. Polls the redis
-  // cam:frames:<id> tail at ~10fps and pushes LIGHT metadata (boxes, faces,
-  // landmarks, pose, colors, face thumbnails) to the client as a single
-  // reactive doc — no Mongo, heavy fields (embeddings, person crops) stripped.
+  /**
+   * One redis poller per camera, shared by everyone watching it.
+   *
+   * Each subscription used to start its own interval, so two operators on the
+   * same camera meant twice the redis traffic — and the overlay feed polls ten
+   * times a second. Now the first subscriber starts the poller, the rest
+   * attach to it, and the last one to leave stops it. A late joiner gets the
+   * most recent payload immediately instead of an empty document.
+   */
+  function sharedCameraFeed(
+    collection: string,
+    intervalMs: number,
+    initial: Record<string, unknown>,
+    read: (camId: string, state: { last: any }) => Promise<Record<string, unknown> | null>,
+  ) {
+    interface Room {
+      subscribers: Set<any>;
+      timer: number;
+      latest: Record<string, unknown>;
+      state: { last: any };
+    }
+    const rooms = new Map<string, Room>();
+
+    return function join(camId: string, sub: any) {
+      let room = rooms.get(camId);
+      if (!room) {
+        const fresh: Room = {
+          subscribers: new Set(), timer: 0, latest: { ...initial }, state: { last: null },
+        };
+        fresh.timer = Meteor.setInterval(async () => {
+          let update: Record<string, unknown> | null = null;
+          try {
+            update = await read(camId, fresh.state);
+          } catch {
+            // Polled up to ten times a second: a malformed or missing redis
+            // frame is normal and self-corrects on the next tick, and logging
+            // it would flood the console.
+          }
+          if (!update) return;
+          fresh.latest = { ...fresh.latest, ...update };
+          for (const s of fresh.subscribers) s.changed(collection, camId, update);
+        }, intervalMs);
+        rooms.set(camId, fresh);
+        room = fresh;
+      }
+
+      room.subscribers.add(sub);
+      sub.added(collection, camId, room.latest);
+      sub.ready();
+
+      sub.onStop(() => {
+        const current = rooms.get(camId);
+        if (!current) return;
+        current.subscribers.delete(sub);
+        if (current.subscribers.size === 0) {
+          Meteor.clearInterval(current.timer);
+          rooms.delete(camId);
+        }
+      });
+    };
+  }
+
+  // Per-frame overlay data for the annotated livestream: LIGHT metadata
+  // (boxes, faces, landmarks, pose, colors, face thumbnails) from the redis
+  // cam:frames:<id> tail — no Mongo, heavy fields (embeddings, person crops)
+  // stripped.
+  const joinOverlay = sharedCameraFeed(
+    'cam_overlay', 100, { persons: [], faces: [], fps: 0 },
+    async (camId, state) => {
+      const raw = await pub.lIndex(`cam:frames:${camId}`, -1);
+      if (!raw) return null;
+      const d = JSON.parse(raw);
+      if (d.frame === state.last) return null;
+      state.last = d.frame;
+      return {
+        frame: d.frame,
+        fps: d.fps,
+        persons: (d.persons || []).map((p: any) => ({
+          tid: p.tid, bbox: p.bbox, known: !!p.has_emb,
+          hc: p.head_color, uc: p.upper_color, lc: p.lower_color,
+          pose: p.pose,
+        })),
+        faces: (d.faces || []).map((f: any) => ({
+          bbox: f.bbox, lm5: f.lm5, frontal: f.frontal, thumb: f.face_crop,
+        })),
+      };
+    },
+  );
+
   Meteor.publish("cam_overlay", function (camId: string) {
     if (!this.userId) return this.ready();
-    if (typeof camId !== 'string') { this.ready(); return; }
-    const self: any = this;
-    let lastFrame = -1;
-    self.added("cam_overlay", camId, { persons: [], faces: [], fps: 0 });
-    self.ready();
-    const timer = Meteor.setInterval(async () => {
-      try {
-        const raw = await pub.lIndex(`cam:frames:${camId}`, -1);
-        if (!raw) return;
-        const d = JSON.parse(raw);
-        if (d.frame === lastFrame) return;
-        lastFrame = d.frame;
-        self.changed("cam_overlay", camId, {
-          frame: d.frame,
-          fps: d.fps,
-          persons: (d.persons || []).map((p: any) => ({
-            tid: p.tid, bbox: p.bbox, known: !!p.has_emb,
-            hc: p.head_color, uc: p.upper_color, lc: p.lower_color,
-            pose: p.pose,
-          })),
-          faces: (d.faces || []).map((f: any) => ({
-            bbox: f.bbox, lm5: f.lm5, frontal: f.frontal, thumb: f.face_crop,
-          })),
-        });
-      } catch {
-        // Polled ten times a second: a single malformed or missing redis
-        // frame is normal and self-corrects on the next tick. Logging here
-        // would flood the console.
-      }
-    }, 100);
-    self.onStop(() => Meteor.clearInterval(timer));
+    if (typeof camId !== 'string' || !camId) return this.ready();
+    joinOverlay(camId, this);
   });
-  // Live VLM caption feed for one camera: polls the redis rolling list
-  // cam:captions:<id> (written by percept_caption.py) and pushes the tail as a
-  // single reactive doc { items: [{t, text}] }. Mirrors cam_overlay's pattern.
+
+  // Live VLM caption feed for one camera: the redis rolling list
+  // cam:captions:<id> (written by percept_caption.py), pushed as a single
+  // reactive doc { items: [{t, text}] }.
+  const joinCaptions = sharedCameraFeed(
+    'cam_captions', 1000, { items: [] },
+    async (camId, state) => {
+      const raw: string[] = await pub.lRange(`cam:captions:${camId}`, -40, -1);
+      const signature = `${raw.length}:${raw.length ? raw[raw.length - 1] : ''}`;
+      if (signature === state.last) return null;   // nothing new
+      state.last = signature;
+      const items = raw.map((s) => { try { return JSON.parse(s); } catch { return null; } })
+                       .filter(Boolean);
+      return { items };
+    },
+  );
+
   Meteor.publish("cam_captions", function (camId: string) {
     if (!this.userId) return this.ready();
-    if (typeof camId !== 'string') { this.ready(); return; }
-    const self: any = this;
-    let lastLen = -1, lastTail = '';
-    self.added("cam_captions", camId, { items: [] });
-    self.ready();
-    const timer = Meteor.setInterval(async () => {
-      try {
-        const raw: string[] = await pub.lRange(`cam:captions:${camId}`, -40, -1);
-        const tail = raw.length ? raw[raw.length - 1] : '';
-        if (raw.length === lastLen && tail === lastTail) return;  // nothing new
-        lastLen = raw.length; lastTail = tail;
-        const items = raw.map((s) => { try { return JSON.parse(s); } catch { return null; } })
-                         .filter(Boolean);
-        self.changed("cam_captions", camId, { items });
-      } catch {
-        // Polled ten times a second: a single malformed or missing redis
-        // frame is normal and self-corrects on the next tick. Logging here
-        // would flood the console.
-      }
-    }, 1000);
-    self.onStop(() => Meteor.clearInterval(timer));
+    if (typeof camId !== 'string' || !camId) return this.ready();
+    joinCaptions(camId, this);
   });
   Meteor.publish("caption_alerts", function (filter: any = {}, limit: number = 100) {
     if (!this.userId) return this.ready();
