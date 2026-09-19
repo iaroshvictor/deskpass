@@ -5,6 +5,7 @@ type MeteorMethod = (this: Meteor.MethodThisType, ...args: any[]) => any
 
 const personMethods : {[x:string]:MeteorMethod} = {
     countVisits :async function(filter:{cam?:string, timestamp?:{ $gte?: Date, $lte?: Date }} = {}): Promise<number> {
+        if (!this.userId) throw new Meteor.Error('not-authorized');
         return await VisitsSummaryCollection.find(filter).countAsync();
     },
     removeVisit: async function(visitId: string): Promise<void> {

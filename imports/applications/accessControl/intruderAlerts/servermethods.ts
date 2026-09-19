@@ -18,12 +18,12 @@ const IntruderMethods: { [x: string]: MeteorMethod } = {
         });
         return updateResult;
     },
-    seenAllIntruders(){
+    async seenAllIntruders(){
         this.unblock();
         if (!this.userId) {
             throw new Meteor.Error('not-authorized', 'You must be logged in to set all intruders as seen.');
         }
-        IntruderAlertsCollection.updateAsync(
+        await IntruderAlertsCollection.updateAsync(
             { seen: false },
             { $set: { seen: true, seenBy: this.userId, seenAt: new Date() } },
             { multi: true }
@@ -40,6 +40,7 @@ const IntruderMethods: { [x: string]: MeteorMethod } = {
         return IntruderAlertsCollection.find(filter).countAsync();
     },
     findBestMatch: async function (intruderId:string) {
+        if (!this.userId) throw new Meteor.Error('not-authorized');
         const myModel = await IntruderAlertsCollection.findOneAsync(intruderId);
         if (!myModel) {
             throw new Meteor.Error('not-found', 'Intruder not found');

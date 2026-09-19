@@ -1,5 +1,4 @@
 import { Mongo } from 'meteor/mongo';
-import { Meteor } from 'meteor/meteor';
 
 export interface RoleDefinition {
   _id?: string;
@@ -18,8 +17,7 @@ export interface Role {
 export const RolesCollection = new Mongo.Collection<Role>('roles');
 export const RoleDefinitionsCollection = new Mongo.Collection<RoleDefinition>('roleDefinitions');
 
-export async function requireAdmin(userId: string | null): Promise<void> {
-  if (!userId) throw new Meteor.Error('not-authorized', 'You must be logged in.');
-  const role = await RolesCollection.findOneAsync({ userId, role: 'admin' });
-  if (!role) throw new Meteor.Error('not-authorized', 'Admin role required.');
-}
+// A requireAdmin helper used to live here, which put a server-side role
+// lookup into a module the client imports for its collections. It had no
+// callers. The authorisation helpers in imports/security/guards.ts replace
+// it and stay on the server.
