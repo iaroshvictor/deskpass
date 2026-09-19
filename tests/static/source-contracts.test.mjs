@@ -228,3 +228,38 @@ describe('a detached camera window keeps the theme', () => {
     assert.match(livestream, /new MutationObserver\(syncScheme\)/);
   });
 });
+
+describe('the taskbar keeps its controls on screen', () => {
+  const desktop = read('imports/ui/desktop/index.tsx');
+  const bar = desktop.match(/<AppBar>[\s\S]*?<\/AppBar>/)?.[0] ?? '';
+
+  test('the bar is defined', () => assert.notEqual(bar, ''));
+
+  // The strip of open windows used to be width:100%, which claimed the whole
+  // row: the clock and the theme switch were pushed past the right edge as
+  // soon as the window narrowed.
+  test('the strip of open windows does not claim the whole row', () => {
+    assert.doesNotMatch(bar, /<Stack sx=\{\{width:'100%'\}\}/);
+  });
+
+  test('the strip scrolls instead of pushing its neighbours out', () => {
+    const strip = bar.match(/flex: 1, minWidth: 0[^}]*\}/)?.[0] ?? '';
+    assert.match(strip, /overflowX: 'auto'/);
+  });
+
+  test('every control to the right of the strip refuses to shrink', () => {
+    const rightOfStrip = bar.slice(bar.indexOf('overflowX'));
+    const controls = (rightOfStrip.match(/flexShrink: 0/g) ?? []).length;
+    // the two dividers, the status chip, the theme switch, the clock
+    assert.ok(controls >= 5, `only ${controls} non-shrinking controls after the task strip`);
+  });
+
+  test('the open-window buttons are painted with theme colours', () => {
+    // They were white washes on a bar that is now white in the light scheme.
+    const buttons = bar.match(/taskManager\.map[\s\S]*?<\/Button>/)?.[0] ?? '';
+    assert.notEqual(buttons, '');
+    assert.doesNotMatch(buttons, /rgba\(255,\s*255,\s*255/);
+    assert.doesNotMatch(buttons, /solid white/);
+    assert.match(buttons, /backgroundColor: task\.minimized \? 'action\.hover'/);
+  });
+});

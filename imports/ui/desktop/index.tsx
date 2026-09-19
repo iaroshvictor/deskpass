@@ -505,9 +505,9 @@ export default function Desktop() {
             ))}
         </DesktopBox>
     <AppBar>
-        <Stack direction='row' spacing={2}>
+        <Stack direction='row' spacing={{ xs: 1, sm: 2 }} alignItems='center' sx={{ width: '100%', minWidth: 0 }}>
             <Button
-                sx={{ width: '48px', background: 'primary.main', '&:hover': { background: 'primary.dark' } }}
+                sx={{ width: '48px', flexShrink: 0, background: 'primary.main', '&:hover': { background: 'primary.dark' } }}
                 onClick={(e)=>{
                     setStartAnchorEl(e.currentTarget);
                 }}
@@ -640,8 +640,16 @@ export default function Desktop() {
                     />
                 </Box>
             </Popover>
-            <Divider orientation="vertical" flexItem />
-            <Stack sx={{width:'100%'}} direction='row' spacing={2}>
+            <Divider orientation="vertical" flexItem sx={{ flexShrink: 0 }} />
+            <Stack
+                direction='row'
+                spacing={{ xs: 1, sm: 2 }}
+                sx={{
+                    flex: 1, minWidth: 0, overflowX: 'auto', overflowY: 'hidden',
+                    // a scrollbar inside a 52px bar would eat the buttons
+                    scrollbarWidth: 'none', '&::-webkit-scrollbar': { display: 'none' },
+                }}
+            >
                 {taskManager.map(task=>(
                     <Button key={task.appId} onClick={()=>{
                             if(lastActive === task.appId){
@@ -653,13 +661,22 @@ export default function Desktop() {
                                 bringToTop(task.appId)
                             }
                         }
-                        } sx={{width:'48px', background:task.minimized?'rgba(255, 255, 255, 0.1)' : lastActive === task.appId ? 'rgba(255, 255, 255, 0.8)' : 'rgba(255, 255, 255, 0.2)',borderBottom:'1px solid white'}}>
+                        } sx={{
+                            width: '48px', minWidth: '48px', flexShrink: 0,
+                            backgroundColor: task.minimized ? 'action.hover'
+                                : lastActive === task.appId ? 'action.selected'
+                                : 'action.disabledBackground',
+                            // the active window is marked by the underline, which
+                            // reads on either scheme
+                            borderBottom: '2px solid',
+                            borderBottomColor: lastActive === task.appId ? 'primary.main' : 'transparent',
+                        }}>
                         {task.appIcon}
                     </Button>
                 ))}
                
             </Stack>
-            <Divider orientation="vertical" flexItem />
+            <Divider orientation="vertical" flexItem sx={{ flexShrink: 0 }} />
             <Tooltip title={apolloStatus?.message || 'Apollo API Status'}>
                 <Chip
                     size="small"
@@ -678,13 +695,15 @@ export default function Desktop() {
                     }
                     sx={{
                         mx: 1,
+                        flexShrink: 0,
+                        '& .MuiChip-label': { display: { xs: 'none', sm: 'block' } },
                         backgroundColor:
                             apolloStatus?.status === 'connected' ? 'success.main' :
                             apolloStatus?.status === 'connecting' ? 'warning.main' :
                             apolloStatus?.status === 'auth_error' ? 'error.main' :
                             'text.secondary',
                         color: 'background.default',
-                        '& .MuiChip-icon': { color: 'background.default' },
+                        '& .MuiChip-icon': { color: 'background.default', mx: { xs: 0.5, sm: undefined } },
                         '@keyframes spin': {
                             '0%': { transform: 'rotate(0deg)' },
                             '100%': { transform: 'rotate(360deg)' }
@@ -692,16 +711,18 @@ export default function Desktop() {
                     }}
                 />
             </Tooltip>
-            <Divider orientation="vertical" flexItem />
-            <Box sx={{ display: 'flex', alignItems: 'center' }}>
+            <Divider orientation="vertical" flexItem sx={{ flexShrink: 0 }} />
+            <Box sx={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>
                 <ThemeToggle />
             </Box>
-            <Divider orientation="vertical" flexItem />
-            <Box sx={{pr:2, textAlign:'center'}}>
-                <Typography color='text.primary' variant='subtitle2'>
+            <Divider orientation="vertical" flexItem sx={{ flexShrink: 0 }} />
+            <Box sx={{ pr: { xs: 0.5, sm: 2 }, textAlign: 'center', flexShrink: 0 }}>
+                <Typography color='text.primary' variant='subtitle2' noWrap>
                     {format(time, 'HH:mm:ss')}
                 </Typography>
-                <Typography color='text.primary' variant='subtitle2'>
+                {/* the date is the first thing to go when the bar runs out of room */}
+                <Typography color='text.primary' variant='subtitle2' noWrap
+                    sx={{ display: { xs: 'none', sm: 'block' } }}>
                      {format(time, 'dd MMMM')}
                 </Typography>
             </Box>
