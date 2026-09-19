@@ -93,6 +93,7 @@ const AppBar = styled(Box)(({ theme }) => ({
     boxSizing:'border-box',
     bottom:0,
     left:0,
+    zIndex: 1100,
     // Was a fixed translucent grey, which sat wrong on a light desktop.
     background: (theme.vars ?? theme).palette.background.paper,
     borderTop: `1px solid ${(theme.vars ?? theme).palette.divider}`,
@@ -374,7 +375,13 @@ export default function Desktop() {
             )}
             {(UnseenPersonAlerts.length>0 || UnseenIntruders.length>0 || UnseenScenarioEvents.length>0) &&(
 
-                <Box sx={{ position: 'absolute', top: 10, right: 10, width: showAlerts ? '280px' : 'auto', zIndex: 1000 }}>
+                <Box sx={{
+                    position: 'absolute', top: 10, right: 10,
+                    width: showAlerts ? '280px' : 'auto', zIndex: 1000,
+                    // stop above the taskbar (52px) and scroll instead of
+                    // spilling off the screen
+                    maxHeight: 'calc(100vh - 72px)', overflowY: 'auto', overflowX: 'hidden',
+                }}>
                     <Stack direction="row" spacing={1} sx={{ mb: 1 }}>
                         <IconButton
                             size="small"

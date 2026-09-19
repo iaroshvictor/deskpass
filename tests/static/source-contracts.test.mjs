@@ -263,3 +263,21 @@ describe('the taskbar keeps its controls on screen', () => {
     assert.match(buttons, /backgroundColor: task\.minimized \? 'action\.hover'/);
   });
 });
+
+describe('nothing on the desktop covers the taskbar', () => {
+  const desktop = read('imports/ui/desktop/index.tsx');
+
+  test('the bar sits above the desktop layers', () => {
+    const appBar = desktop.match(/const AppBar = styled\(Box\)\([\s\S]*?\n\}\)\);/)?.[0] ?? '';
+    assert.match(appBar, /zIndex: 1100/);
+  });
+
+  // The alert column grows with the number of alerts. Unbounded, it ran past
+  // the bottom of the screen and took the theme switch and the clock with it.
+  test('the alert column stops above the bar and scrolls', () => {
+    const column = desktop.match(/position: 'absolute', top: 10, right: 10[\s\S]{0,400}?\}\}>/)?.[0] ?? '';
+    assert.notEqual(column, '');
+    assert.match(column, /maxHeight: 'calc\(100vh - \d+px\)'/);
+    assert.match(column, /overflowY: 'auto'/);
+  });
+});
