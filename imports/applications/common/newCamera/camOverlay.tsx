@@ -635,7 +635,7 @@ const ColorRow: React.FC<ColorRowProps> = ({ label, value, onChange }) => (
     <Stack direction="row" spacing={1} alignItems="center">
         <Typography variant="caption">{label}</Typography>
         <input type="color" value={value} onChange={e => onChange(e.target.value)}
-            style={{ width: 36, height: 28, border: '1px solid #ccc', borderRadius: 4, cursor: 'pointer', padding: 2 }} />
+            style={{ width: 36, height: 28, border: '1px solid', borderColor: 'divider', borderRadius: 4, cursor: 'pointer', padding: 2 }} />
     </Stack>
 );
 

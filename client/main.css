@@ -1,5 +1,10 @@
 body {
-  font-family: sans-serif;
+  /* Typography and surface come from the MUI theme (imports/ui/theme.ts).
+     CssBaseline applies them at runtime; these are the values used before it
+     mounts, so the first paint is not a white flash. */
+  font-family: var(--mui-font-family, sans-serif);
+  background: var(--mui-palette-background-default, #0a0a0c);
+  color: var(--mui-palette-text-primary, #e8e8ea);
   min-height: 100vh;
   margin:0;
   box-sizing: border-box;
@@ -7,8 +12,9 @@ body {
 }
 
 body {
-  --sb-track-color: #232e33b6;
-  --sb-thumb-color: #757575b6;
+  /* The scrollbar used to be a fixed teal whatever the scheme was. */
+  --sb-track-color: var(--mui-palette-surface-sunken, #232e33);
+  --sb-thumb-color: var(--mui-palette-text-disabled, #757575);
   --sb-size: 5px;
 }
 
@@ -24,7 +30,7 @@ body {
 ::-webkit-scrollbar-thumb {
   background: var(--sb-thumb-color);
   border-radius: 2px;
-  border: 1px solid #1a79a5b6;
+  border: 1px solid var(--mui-palette-divider, #1a79a5);
 }
 
 @supports not selector(::-webkit-scrollbar) {
@@ -43,10 +49,10 @@ body {
   color:white
 }
 .window{
-  background-color: rgba(0,0,0, 0.9);
+  background-color: rgba(from var(--mui-palette-background-default, #0a0a0c) r g b / 0.9);
   padding:2px;
   border-radius: 4px;
-  color:white;
+  color: var(--mui-palette-text-primary, #e8e8ea);
   width:100%;
   height:100%;
   display: flex;

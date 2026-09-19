@@ -3,10 +3,13 @@ import { Box, Typography } from '@mui/material';
 import { Cam } from '/imports/api/cams';
 import { Recording } from '/imports/api/recordings';
 
-export const CAM_COLORS = [
-  '#2196f3', '#4caf50', '#ff9800', '#e91e63',
-  '#9c27b0', '#00bcd4', '#8bc34a', '#ff5722',
-];
+// One colour per camera on the timeline. These identify rather than signal,
+// so they come from the theme's categorical set instead of the palette: the
+// same eight hues hold their separation on both the dark and the light
+// ground, and none of them can be mistaken for the red that means "alarm".
+import { SERIES } from '/imports/ui/theme';
+
+export const CAM_COLORS = [...SERIES];
 
 const ROW_HEIGHT  = 26;
 const AXIS_HEIGHT = 22;

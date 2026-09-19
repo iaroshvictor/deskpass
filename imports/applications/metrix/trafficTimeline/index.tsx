@@ -96,7 +96,7 @@ function TrafficTimelineRenderer() {
         datasets: [{
             label: 'Unique Visitors',
             data: timelineData.dataPoints.map(dp => dp.count),
-            borderColor: '#1976d2',
+            borderColor: 'primary.main',
             backgroundColor: chartType === 'line' ? 'rgba(25, 118, 210, 0.2)' : 'rgba(25, 118, 210, 0.7)',
             fill: chartType === 'line',
             tension: 0.3

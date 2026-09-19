@@ -27,7 +27,7 @@ const ZoneItem = (props: zoneItemProps) => {
             <ListItem
                 disableGutters
                 key={zone._id}
-                sx={{ p: 0, borderLeft: '1px solid #ccc' }}
+                sx={{ p: 0, borderLeft: '1px solid', borderLeftColor: 'divider' }}
             >
                 <ListItemButton role={undefined} onClick={() => { setSelectedZoneId(zone._id || ''); }} dense>
                     <ListItemIcon>
@@ -44,7 +44,7 @@ const ZoneItem = (props: zoneItemProps) => {
             </ListItem>
 
             {zones.filter(z => z.parent === zone._id).length > 0 && (
-                <List dense sx={{ borderTop: '1px solid #8080801f', borderBottom: '1px solid #8080801f', ml: 3 }}>
+                <List dense sx={{ borderTop: '1px solid', borderBottom: '1px solid', ml: 3 }}>
                     {zones.filter(z => z.parent === zone._id).map((childZone) => (
                         <ZoneItem
                             key={childZone._id}

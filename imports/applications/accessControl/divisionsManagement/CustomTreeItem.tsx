@@ -89,7 +89,7 @@ const CustomTreeItem = React.forwardRef(function CustomTreeItem(
     <>
       <TreeItemProvider defaultExpanded {...getContextProviderProps()}>
         <TreeItemRoot
-          sx={{ ml: 1, borderLeft: '1px solid #d7d7d7' }}
+          sx={{ ml: 1, borderLeft: '1px solid', borderLeftColor: 'divider' }}
           {...getRootProps(other)}
         >
           <Stack direction="row">

@@ -108,7 +108,7 @@ const ZoneItemSelector = (props:zoneItemProps)=>{
           </ListItem>
        
         {zones.filter(z=>z.parent === zone._id).length > 0 && (
-            <List dense sx={{borderTop:'1px solid #8080801f', borderBottom:'1px solid #8080801f', ml:3, borderLeft:'1px solid #cfcfcf'}}>
+            <List dense sx={{borderTop:'1px solid', borderBottom:'1px solid', borderColor:'divider', ml:3, borderLeft:'1px solid', borderLeftColor:'divider'}}>
             {zones.filter(z=>z.parent === zone._id).map((childZone)=>(
                 <ZoneItemSelector
                     key={childZone._id}
@@ -223,7 +223,7 @@ const GateAddEdit = ({gate,Zones, Cams, Controllers, setErrorMessage, resetEditt
                             horizontal: 'left',
                         }}
                         >
-                            <List dense sx={{borderLeft: '1px solid #cfcfcf'}}>
+                            <List dense sx={{ borderLeft: '1px solid', borderLeftColor: 'divider' }}>
                             {Zones.filter(zone=>zone.parent === 'root').map((zone)=>(
                                 <ZoneItemSelector
                                     zone={zone}
@@ -697,7 +697,7 @@ const GateAddEdit = ({gate,Zones, Cams, Controllers, setErrorMessage, resetEditt
                 <Stack direction ='column' spacing={2}>
                     <Table sx={{width:'100%', mt:1}}>
                         <TableBody>
-                            <TableRow sx={{backgroundColor:'#e1e1e1'}}>
+                            <TableRow sx={{ backgroundColor: 'action.hover' }}>
                                 <TableCell>
                                     <Typography variant="subtitle2">Gate Name:</Typography>
                                 </TableCell>
@@ -803,7 +803,7 @@ const ZoneItem = ({zone, Gates, Zones, setEditingGate}:{zone:Zone, Gates:Gate[],
     return(
         <>
         <Accordion sx={{boxShadow: '0px 5px 5px -3px rgba(0, 0, 0, 0.2), 0px 8px 10px 1px rgba(0, 0, 0, 0.14), 0px 3px 14px 2px rgba(0, 0, 0, 0.12)', mb: 1}}  key={zone._id}>
-                    <AccordionSummary   expandIcon={<ExpandMoreIcon />} sx={{backgroundColor:'#f5f5f5'}}>
+                    <AccordionSummary   expandIcon={<ExpandMoreIcon />} sx={{ backgroundColor: 'surface.sunken' }}>
                         {`${zone.name} (${Gates.filter(gate => gate.zone === zone._id).length})`} 
                     </AccordionSummary>
                     <AccordionDetails sx={{pr:0}}>

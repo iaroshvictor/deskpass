@@ -26,22 +26,43 @@ const CamOverlayCollection = new Mongo.Collection<any>('cam_overlay');
 // shared /imports/api collection (a second same-named collection throws on server).
 const CamCaptionCollection = new Mongo.Collection<any>('cam_captions');
 
-// ── dark tactical palette ────────────────────────────────────────────────────
-const C = {
-  bg: '#0a0a0c',
-  panel: '#141416',
-  panel2: '#0e0e10',
-  border: '#26262b',
-  borderSoft: '#1d1d21',
-  text: '#e8e8ea',
-  dim: '#6b6b74',
-  label: '#8a8a93',
-  green: '#3ddc84',
-  red: '#ff5a5a',
-  redBadge: '#d92c2c',
-  accent: '#7aa2ff',
+// ── palette ──────────────────────────────────────────────────────────────────
+import { useTheme } from '@mui/material/styles';
+import { tactical as OVERLAY, MONO } from '/imports/ui/theme';
+
+type Palette = Record<keyof typeof OVERLAY, string>;
+
+/**
+ * Chrome colours for this screen, read from the active MUI scheme so the
+ * frame, panels and labels follow the theme switch. The dark scheme in
+ * imports/ui/theme.ts is built from the same constants this file used to
+ * hardcode, so dark mode looks exactly as it did before.
+ *
+ * Anything painted ON TOP of the video keeps the fixed dark `OVERLAY` tokens
+ * instead: the picture is always letterboxed against black, so a light chip or
+ * caption over a night scene would be unreadable whatever the app theme is.
+ */
+const usePalette = (): Palette => {
+  const t = useTheme();
+  // `t.vars` holds var(--mui-palette-…) references, which follow the scheme
+  // class on <html>. `t.palette` holds the values of the DEFAULT scheme only,
+  // so reading it here would leave this screen stuck in light mode.
+  const v = (t.vars ?? t).palette;
+  return React.useMemo(() => ({
+    bg: v.background.default,
+    panel: v.background.paper,
+    panel2: v.surface.sunken,
+    border: v.divider,
+    borderSoft: v.surface.borderSoft,
+    text: v.text.primary,
+    dim: v.text.disabled,
+    label: v.text.secondary,
+    green: v.success.main,
+    red: v.error.main,
+    redBadge: v.surface.badge,
+    accent: v.primary.main,
+  }), [v]);
 };
-const MONO = 'ui-monospace, "SF Mono", Menlo, Consolas, "Roboto Mono", monospace';
 
 // ── caption font size, persisted in a cookie ──────────────────────────────────
 const CAPTION_FONT_COOKIE = 'captionFontPx';
@@ -94,8 +115,10 @@ const useCaptionFont = (): [number, (delta: number) => void] => {
 // to THAT window's <head>, so MUI/emotion styles land in the popup (not the
 // opener). Closing the popup (or unmounting) tears it down.
 const PopOut = ({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) => {
+  const C = usePalette();
   const containerRef = React.useRef<HTMLElement | null>(null);
   const [cache, setCache] = React.useState<ReturnType<typeof createCache> | null>(null);
+  const [win, setWin] = React.useState<Window | null>(null);
   React.useEffect(() => {
     const w = window.open('', '',
       'popup=yes,noopener=no,width=860,height=620,toolbar=no,location=no,menubar=no,status=no');
@@ -107,10 +130,29 @@ const PopOut = ({ title, onClose, children }: { title: string; onClose: () => vo
     w.document.body.appendChild(div);
     containerRef.current = div;
     setCache(createCache({ key: 'popout', container: w.document.head }));
+    setWin(w);
     const bye = () => onClose();
     w.addEventListener('beforeunload', bye);
     return () => { w.removeEventListener('beforeunload', bye); w.close(); };
   }, []);
+
+  // The new document is empty: copy the opener's stylesheets, which is where
+  // the theme declares its custom properties, and keep the colour-scheme class
+  // in step so switching the theme reaches the detached window too.
+  React.useEffect(() => {
+    if (!win) return;
+    document.head.querySelectorAll('style,link[rel="stylesheet"]')
+      .forEach((node) => win.document.head.appendChild(node.cloneNode(true)));
+    const syncScheme = () => {
+      win.document.documentElement.className = document.documentElement.className;
+      win.document.body.className = document.body.className;
+    };
+    syncScheme();
+    const observer = new MutationObserver(syncScheme);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+    observer.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+    return () => observer.disconnect();
+  }, [win]);
   if (!cache || !containerRef.current) return null;
   return createPortal(<CacheProvider value={cache}>{children}</CacheProvider>, containerRef.current);
 };
@@ -211,34 +253,47 @@ const useFreshFaces = (ov: any): any[] => {
 };
 
 // ── small building blocks ─────────────────────────────────────────────────────
-const StatChip = ({ label, value, color = C.text }: { label: string; value: React.ReactNode; color?: string }) => (
-  <Box sx={{
-    display: 'flex', alignItems: 'center', gap: 0.75,
-    px: 1, py: 0.4, background: 'rgba(8,8,10,.72)', border: `1px solid ${C.borderSoft}`,
-    borderRadius: 1, fontFamily: MONO,
-  }}>
-    <Typography sx={{ fontSize: 9, letterSpacing: 1, color: C.label }}>{label}</Typography>
-    <Typography sx={{ fontSize: 12, fontWeight: 700, lineHeight: 1, color }}>{value}</Typography>
-  </Box>
-);
+// `overlay` marks the chips that float over the video: those keep the fixed
+// dark tokens, the ones inside a panel follow the theme.
+const StatChip = ({ label, value, color, overlay = false }: {
+  label: string; value: React.ReactNode; color?: string; overlay?: boolean;
+}) => {
+  const themed = usePalette();
+  const C = overlay ? OVERLAY : themed;
+  return (
+    <Box sx={{
+      display: 'flex', alignItems: 'center', gap: 0.75,
+      px: 1, py: 0.4,
+      background: overlay ? 'rgba(8,8,10,.72)' : C.panel2,
+      border: `1px solid ${C.borderSoft}`,
+      borderRadius: 1, fontFamily: MONO,
+    }}>
+      <Typography sx={{ fontSize: 9, letterSpacing: 1, color: C.label }}>{label}</Typography>
+      <Typography sx={{ fontSize: 12, fontWeight: 700, lineHeight: 1, color: color ?? C.text }}>{value}</Typography>
+    </Box>
+  );
+};
 
 // Module-scoped so its identity is stable: the card re-renders ~10×/sec (frame
 // feed + face-TTL tick); an inline component would remount the tab DOM every
 // render and drop clicks.
-const TabButton = ({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) => (
-  <Box onClick={onClick} sx={{
-    px: 1.25, py: 0.5, fontFamily: MONO, fontSize: 10, letterSpacing: 1, cursor: 'pointer', userSelect: 'none',
-    color: active ? C.text : C.dim,
-    borderBottom: `2px solid ${active ? C.accent : 'transparent'}`,
-    '&:hover': { color: C.text },
-  }}>{children}</Box>
-);
+const TabButton = ({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) => {
+  const C = usePalette();
+  return (
+    <Box onClick={onClick} sx={{
+      px: 1.25, py: 0.5, fontFamily: MONO, fontSize: 10, letterSpacing: 1, cursor: 'pointer', userSelect: 'none',
+      color: active ? C.text : C.dim,
+      borderBottom: `2px solid ${active ? C.accent : 'transparent'}`,
+      '&:hover': { color: C.text },
+    }}>{children}</Box>
+  );
+};
 
 const AlertBadge = ({ keyword, onDismiss }: { keyword: string; onDismiss?: () => void }) => (
   <Box onClick={onDismiss} title={onDismiss ? 'dismiss alert' : undefined}
     sx={{
       display: 'inline-flex', alignItems: 'center', gap: 0.5,
-      px: 1, py: 0.35, background: C.redBadge, color: '#fff',
+      px: 1, py: 0.35, background: OVERLAY.redBadge, color: '#fff',
       borderRadius: 0.75, fontFamily: MONO, fontSize: 11, fontWeight: 800,
       letterSpacing: 1, textTransform: 'uppercase', cursor: onDismiss ? 'pointer' : 'default',
       boxShadow: '0 0 0 1px rgba(0,0,0,.35), 0 2px 6px rgba(217,44,44,.35)',
@@ -249,6 +304,7 @@ const AlertBadge = ({ keyword, onDismiss }: { keyword: string; onDismiss?: () =>
 
 // ── SCENE LOG (VLM captions) + per-camera watch-word editor ───────────────────
 const CaptionsPanel = ({ cam }: { cam: Cam }) => {
+  const C = usePalette();
   useSubscribe('cam_captions', cam._id);
   const doc = useFind(() => CamCaptionCollection.find({ _id: cam._id }))[0];
   const items: { t: number; text: string }[] = doc?.items || [];
@@ -342,6 +398,7 @@ const CaptionsPanel = ({ cam }: { cam: Cam }) => {
 
 // ── SIDEBAR: in-frame faces + line-crossing events ────────────────────────────
 const SidebarPanel = ({ cam, faces }: { cam: Cam; faces: any[] }) => {
+  const C = usePalette();
   useSubscribe('cam_events', cam._id || '', 10);
   const events = useFind(() => CamEventsCollection.find(
     { source: cam._id }, { sort: { timestamp: -1 }, limit: 10 }));
@@ -404,6 +461,7 @@ const SidebarPanel = ({ cam, faces }: { cam: Cam; faces: any[] }) => {
 
 // ── one camera card ───────────────────────────────────────────────────────────
 export const LiveCamPlayer = ({ cam, sx = {}, embedded = false }: { cam: Cam; sx?: { [x: string]: any }; embedded?: boolean }) => {
+  const C = usePalette();
   const [message, setMessage] = React.useState<string | null>(null);
   const [streamEpoch, setStreamEpoch] = React.useState(0);
   const [streamState, setStreamState] = React.useState<'connecting' | 'live' | 'error'>('connecting');
@@ -504,15 +562,15 @@ export const LiveCamPlayer = ({ cam, sx = {}, embedded = false }: { cam: Cam; sx
 
         {/* live counts (top-right) */}
         <Box sx={{ position: 'absolute', top: 8, right: 8, zIndex: 2, display: 'flex', flexDirection: 'column', gap: 0.5, alignItems: 'flex-end' }}>
-          <StatChip label="PERSONS" value={persons} color={persons ? C.text : C.dim} />
-          <StatChip label="FACES" value={faces.length} color={faces.length ? C.text : C.dim} />
+          <StatChip overlay label="PERSONS" value={persons} color={persons ? OVERLAY.text : OVERLAY.dim} />
+          <StatChip overlay label="FACES" value={faces.length} color={faces.length ? OVERLAY.text : OVERLAY.dim} />
         </Box>
 
         {!isLive && (
           <Typography onClick={() => setStreamEpoch((e) => e + 1)}
             sx={{
               position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)',
-              color: C.dim, fontFamily: MONO, fontSize: 12, cursor: 'pointer', textAlign: 'center',
+              color: OVERLAY.dim, fontFamily: MONO, fontSize: 12, cursor: 'pointer', textAlign: 'center',
             }}>
             {streamState === 'connecting' ? 'connecting…' : 'stream unavailable — click to retry'}
           </Typography>
@@ -540,6 +598,7 @@ export const LiveCamPlayer = ({ cam, sx = {}, embedded = false }: { cam: Cam; sx
 
 // ── page: aggregate header + camera grid ──────────────────────────────────────
 const LivestreamRenderer = () => {
+  const C = usePalette();
   useSubscribe('cams');
   useSubscribe('cam_live_status');
   useSubscribe('caption_alerts_unseen');
@@ -559,7 +618,8 @@ const LivestreamRenderer = () => {
       <Box sx={{
         display: 'flex', alignItems: 'center', gap: 2, px: 2.5, py: 1.5,
         borderBottom: `1px solid ${C.border}`, position: 'sticky', top: 0, zIndex: 5,
-        background: 'rgba(10,10,12,.92)', backdropFilter: 'blur(6px)',
+        background: 'rgba(from var(--mui-palette-background-default) r g b / 0.92)',
+        backdropFilter: 'blur(6px)',
       }}>
         <Typography sx={{ fontWeight: 700, fontSize: 16, color: C.text }}>Live Stream</Typography>
         <Typography sx={{ fontFamily: MONO, fontSize: 11, color: C.label, letterSpacing: 1.5, textTransform: 'uppercase' }}>

@@ -108,18 +108,42 @@ const camMethods : {[x:string]:MeteorMethod} = {
         if(!rtspLink || !rtspLink.startsWith('rtsp://')){
             throw new Meteor.Error('invalid-rtsp-link', 'Invalid RTSP link provided');
         }
-        const stream = new rtsp.FFMpeg({input: rtspLink});
-        return new Promise<string>((resolve, _reject) => {
-            stream.on('data', (data:Buffer) => {
-                //stop the ffmpeg stream
-                stream.stop();
-                resolve(data.toString('base64'));
+        const stream = new rtsp.FFMpeg({ input: rtspLink });
+        return new Promise<string>((resolve, reject) => {
+            // Throwing inside an EventEmitter's 'error' handler does not reject
+            // the promise — it becomes an uncaught exception and takes the whole
+            // server down, which is what happened whenever ffmpeg was missing
+            // from PATH. Reject instead, so the caller gets an error and the
+            // rest of the application keeps running.
+            let settled = false;
+            const finish = (fn: () => void) => {
+                if (settled) return;
+                settled = true;
+                try { stream.stop(); } catch { /* never started */ }
+                fn();
+            };
+
+            // Neither event is guaranteed to fire: an unreachable camera can
+            // leave ffmpeg waiting indefinitely.
+            const timer = setTimeout(
+                () => finish(() => reject(new Meteor.Error('rtsp-timeout', 'The camera did not send a frame in time.'))),
+                20000,
+            );
+
+            stream.on('data', (data: Buffer) => {
+                clearTimeout(timer);
+                finish(() => resolve(data.toString('base64')));
             });
-            stream.on('error', (err:any) => {
-                console.error('Error starting RTSP stream:', err);
-                throw new Meteor.Error('invalid-rtsp-link', 'Invalid RTSP link provided');
-                
-                
+            stream.on('error', (err: any) => {
+                clearTimeout(timer);
+                console.error('[rtsp] preview failed for', rtspLink, '-', err?.message ?? err);
+                const missingFfmpeg = /executable wasn't found/i.test(String(err?.message ?? ''));
+                finish(() => reject(new Meteor.Error(
+                    missingFfmpeg ? 'ffmpeg-missing' : 'invalid-rtsp-link',
+                    missingFfmpeg
+                        ? 'ffmpeg is not installed on the server, so camera previews are unavailable.'
+                        : 'Could not read a frame from that RTSP link.',
+                )));
             });
         });
         // Here you can add more validation logic for the RTSP link if needed

@@ -152,3 +152,79 @@ describe('the repository documents how to run the system', () => {
     assert.ok(found, 'no README: Redis, the perception service, DVR_BIN, APACS and ONVIF are undocumented');
   });
 });
+
+// ── theming ──────────────────────────────────────────────────────────────────
+// Colour now lives in imports/ui/theme.ts and reaches the DOM as CSS custom
+// properties, so a screen that hardcodes a colour silently stops following the
+// theme switch. Two places used to: the livestream screen, which owned the
+// palette before it was extracted, and the window frame.
+
+describe('the livestream screen takes its colours from the theme', () => {
+  const livestream = read('imports/applications/common/livestream/index.tsx');
+
+  // Everything the screen paints on top of the black video letterbox, where a
+  // light colour would be unreadable whatever the scheme is. Anything else
+  // must come from the theme.
+  const overVideo = new Set([
+    '#000',       // the letterbox itself
+    '#fff',       // the alert badge label, on a saturated red
+    'rgba(8,8,10,.72)',       // the stat chips floating over the picture
+    'rgba(0,0,0,.35)',        // badge shadow
+    'rgba(217,44,44,.35)',    // badge glow
+  ]);
+
+  test('no colour literals outside the video overlays', () => {
+    const literals = [
+      ...livestream.matchAll(/'(#[0-9a-fA-F]{3,8}|rgba?\([^)]*\))'/g),
+    ].map((m) => m[1]).filter((c) => !overVideo.has(c));
+    assert.deepEqual(
+      literals, [],
+      'these colours bypass the theme and will not follow a scheme switch',
+    );
+  });
+
+  test('the sticky page header is tinted with the theme background', () => {
+    const header = livestream.match(/position: 'sticky'[\s\S]{0,300}/)?.[0] ?? '';
+    assert.match(header, /--mui-palette-background-default/);
+  });
+
+  test('the palette is read through theme.vars, which follow the scheme class', () => {
+    // theme.palette holds the DEFAULT scheme only: reading it here would pin
+    // the screen to one scheme no matter what the switch says.
+    assert.match(livestream, /\(t\.vars \?\? t\)\.palette/);
+    assert.doesNotMatch(livestream, /\bt\.palette\./);
+  });
+});
+
+describe('the window frame follows the theme', () => {
+  const css = read('client/main.css');
+  const frame = css.match(/\.window\{[\s\S]*?\}/)?.[0] ?? '';
+
+  test('the frame is defined', () => assert.notEqual(frame, ''));
+
+  test('its background and text come from the theme, not a fixed black', () => {
+    assert.match(frame, /--mui-palette-background-default/);
+    assert.match(frame, /--mui-palette-text-primary/);
+    assert.doesNotMatch(frame, /rgba\(0,\s*0,\s*0/);
+  });
+
+  test('the title bar is not painted black either', () => {
+    const appwindow = read('imports/ui/components/appwindow.tsx');
+    const bar = appwindow.match(/className="appTopBar"[\s\S]{0,120}/)?.[0] ?? '';
+    assert.match(bar, /var\(--mui-palette/);
+  });
+});
+
+describe('a detached camera window keeps the theme', () => {
+  const livestream = read('imports/applications/common/livestream/index.tsx');
+
+  // A new window starts with an empty document: no stylesheets, so none of the
+  // custom properties the styles above reference.
+  test('the pop-out copies the opener stylesheets', () => {
+    assert.match(livestream, /win\.document\.head\.appendChild\(node\.cloneNode\(true\)\)/);
+  });
+
+  test('the pop-out tracks later scheme changes', () => {
+    assert.match(livestream, /new MutationObserver\(syncScheme\)/);
+  });
+});

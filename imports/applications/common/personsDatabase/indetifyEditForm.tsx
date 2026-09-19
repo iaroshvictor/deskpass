@@ -88,7 +88,7 @@ const DivissionItemSelector = (props:divissionItemProps)=>{
           </ListItem>
        
         {divissions.filter(z=>z.parent === divission._id).length > 0 && (
-            <List dense sx={{borderTop:'1px solid #8080801f', borderBottom:'1px solid #8080801f', ml:3, borderLeft:'1px solid #cfcfcf'}}>
+            <List dense sx={{borderTop:'1px solid', borderBottom:'1px solid', borderColor:'divider', ml:3, borderLeft:'1px solid', borderLeftColor:'divider'}}>
             {divissions.filter(z=>z.parent === divission._id).map((childZone)=>(
                 <DivissionItemSelector
                     key={childZone._id}
@@ -141,7 +141,7 @@ const ZoneItem = ({allowedGates, setAllowedGates, zone, Gates, Zones, action}:Zo
             <Stack direction='row'>
                 {action === 'add' 
                 ? (<>
-                    <AccordionSummary   expandIcon={<ExpandMoreIcon />} sx={{backgroundColor:'#f5f5f5'}}>
+                    <AccordionSummary   expandIcon={<ExpandMoreIcon />} sx={{ backgroundColor: 'surface.sunken' }}>
                         {`${zone.name} (${Gates.filter(gate => gate.zone === zone._id).length})`} 
                     </AccordionSummary>
                     <Button
@@ -162,7 +162,7 @@ const ZoneItem = ({allowedGates, setAllowedGates, zone, Gates, Zones, action}:Zo
                     >
                         {`<<`}
                     </Button>
-                    <AccordionSummary   expandIcon={<ExpandMoreIcon />} sx={{backgroundColor:'#f5f5f5'}}>
+                    <AccordionSummary   expandIcon={<ExpandMoreIcon />} sx={{ backgroundColor: 'surface.sunken' }}>
                         {`${zone.name} (${myGates(zone).length})`} 
                     </AccordionSummary>
                 </>)}
@@ -495,7 +495,7 @@ const IdentifyEdit = forwardRef(({tracking_id, visits}:params, ref) => {
                                 horizontal: 'left',
                             }}
                             >
-                                <List dense sx={{borderLeft: '1px solid #cfcfcf'}}>
+                                <List dense sx={{ borderLeft: '1px solid', borderLeftColor: 'divider' }}>
                                 {Divissions.filter(zone=>zone.parent === 'root').map((divission)=>(
                                     <DivissionItemSelector
                                         divission={divission}
@@ -548,7 +548,7 @@ const IdentifyEdit = forwardRef(({tracking_id, visits}:params, ref) => {
                         <Card sx={{width:'100%'}}>
                              <Accordion defaultExpanded sx={{boxShadow: '0px 5px 5px -3px rgba(0, 0, 0, 0.2), 0px 8px 10px 1px rgba(0, 0, 0, 0.14), 0px 3px 14px 2px rgba(0, 0, 0, 0.12)', mb: 1}}>
                                 <Stack direction='row'>
-                                        <AccordionSummary   expandIcon={<ExpandMoreIcon />} sx={{backgroundColor:'#f5f5f5'}}>
+                                        <AccordionSummary   expandIcon={<ExpandMoreIcon />} sx={{ backgroundColor: 'surface.sunken' }}>
                                             Denied gates 
                                         </AccordionSummary>
                                         <Button
@@ -592,7 +592,7 @@ const IdentifyEdit = forwardRef(({tracking_id, visits}:params, ref) => {
                                     >
                                         {`≪ Deny All`}
                                     </Button>
-                                    <AccordionSummary   expandIcon={<ExpandMoreIcon />} sx={{backgroundColor:'#f5f5f5'}}>
+                                    <AccordionSummary   expandIcon={<ExpandMoreIcon />} sx={{ backgroundColor: 'surface.sunken' }}>
                                         Allowed gates 
                                     </AccordionSummary>
                                 </Stack>
