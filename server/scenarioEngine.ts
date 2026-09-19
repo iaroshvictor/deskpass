@@ -219,11 +219,17 @@ export async function initScenarioEngine() {
       const msg = JSON.parse(message);
       if (msg.type === 'status') onStatus(msg).catch(console.error);
       else if (msg.type === 'crossing') onCrossing(msg).catch(console.error);
-    } catch { /* malformed */ }
+    } catch {
+      // A malformed redis payload is dropped: one bad frame must not stop
+      // the engine from processing the rest of the stream.
+    }
   });
   await sub.subscribe('new_detection', (message: string) => {
     try { onDetection(JSON.parse(message)).catch(console.error); }
-    catch { /* malformed */ }
+    catch {
+      // A malformed redis payload is dropped: one bad frame must not stop
+      // the engine from processing the rest of the stream.
+    }
   });
 
   // maintain the active set from the collection (enabled scenarios only)

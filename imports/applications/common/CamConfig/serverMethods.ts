@@ -16,19 +16,19 @@ const camMethods : {[x:string]:MeteorMethod} = {
         if (!this.userId){
            throw new Meteor.Error('not-authorized', 'You must be logged in to insert a cam.');
         }
-        CamsCollection.insertAsync(data)
+        return CamsCollection.insertAsync(data)
     },
     updateCam(id:string, data:Cam){
         if (!this.userId){
            throw new Meteor.Error('not-authorized', 'You must be logged in to insert a cam.');
         }
-        CamsCollection.updateAsync({_id:id}, data)
+        return CamsCollection.updateAsync({_id:id}, data)
     },
     removeCam(id:string){
         if (!this.userId){
            throw new Meteor.Error('not-authorized', 'You must be logged in to insert a cam.');
         }
-        CamsCollection.removeAsync(id)
+        return CamsCollection.removeAsync(id)
     },
     async validateOnvifDevice( selectedDevice:OnvifDeviceDt, onvifusername:string, onvifpassword:string){
         if (!this.userId){

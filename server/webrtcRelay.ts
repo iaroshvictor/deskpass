@@ -229,7 +229,7 @@ async function getRelay(camId: string): Promise<Relay> {
       (pkt) => forwardRtp(r, pkt),
       (err) => {                              // dies → tear down; reject is a no-op if already ready
         console.log(`webrtcRelay [${camId}] rtsp died:`, err.message);
-        for (const v of r.viewers) { try { v.pc.close(); } catch { /* */ } }
+        for (const v of r.viewers) { try { v.pc.close(); } catch { /* peer already closed */ } }
         relays.delete(camId);
         reject(err);
       },
