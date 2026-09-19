@@ -4,15 +4,17 @@ import { PERMISSIONS } from "/imports/security/accessPolicy"
 import { Meteor } from "meteor/meteor"
 
 export default {
-    addZoneItem: async function (this: Meteor.MethodThisType, { parent, name }: { parent: string, name: string }) {
+    addZoneItem: async function (this: Meteor.MethodThisType, args: { parent: string, name: string }) {
       await requirePermission(this, PERMISSIONS.ZONE_EDIT);
+      const { parent, name } = args ?? {};
       if (typeof name !== 'string' || !name.trim()) {
         throw new Meteor.Error('invalid-zone', 'A zone name is required.');
       }
       return await ZonesCollection.insertAsync({ parent: parent || 'root', name: name.trim() });
     },
-    editZone: async function (this: Meteor.MethodThisType, { id, name }: { id: string, name: string }) {
+    editZone: async function (this: Meteor.MethodThisType, args: { id: string, name: string }) {
       await requirePermission(this, PERMISSIONS.ZONE_EDIT);
+      const { id, name } = args ?? {};
       if (typeof name !== 'string' || !name.trim()) {
         throw new Meteor.Error('invalid-zone', 'A zone name is required.');
       }

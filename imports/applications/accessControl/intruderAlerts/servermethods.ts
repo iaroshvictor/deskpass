@@ -3,6 +3,8 @@ import { Meteor } from 'meteor/meteor';
 import { IntruderAlertsCollection } from "/imports/api/intruderAlerts";
 import { Visit, VisitsCollection } from '/imports/api/visits';
 import { VisitsSummaryCollection } from '/imports/api/visitSummary';
+import { checkedFilter } from '/imports/security/checkedFilter';
+import { INTRUDER_FILTER } from '/imports/security/filterSpecs';
 type MeteorMethod = (this: Meteor.MethodThisType, ...args: any[]) => any
 const IntruderMethods: { [x: string]: MeteorMethod } = {
     setSeenIntruder: async function (intruderId: string) {
@@ -37,6 +39,7 @@ const IntruderMethods: { [x: string]: MeteorMethod } = {
         if (!filter || typeof filter !== 'object') {
             throw new Meteor.Error('invalid-filter', 'Filter must be an object.');
         }
+        filter = checkedFilter(filter, INTRUDER_FILTER);
         return IntruderAlertsCollection.find(filter).countAsync();
     },
     findBestMatch: async function (intruderId:string) {

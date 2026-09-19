@@ -1,6 +1,8 @@
 import { Meteor } from 'meteor/meteor';
 import { TemporaryCard, TemporaryCardsCollection } from '/imports/api/temporaryCards';
 import { VisitsSummaryCollection } from '/imports/api/visitSummary';
+import { checkedFilter } from '/imports/security/checkedFilter';
+import { TEMPORARY_CARD_FILTER } from '/imports/security/filterSpecs';
 
 type MeteorMethod = (this: Meteor.MethodThisType, ...args: any[]) => any;
 
@@ -84,7 +86,7 @@ const TemporaryCardsMethods: { [x: string]: MeteorMethod } = {
 
     countTemporaryCards: async function (filter: { [key: string]: any } = {}): Promise<number> {
         if (!this.userId) throw new Meteor.Error('not-authorized', 'You must be logged in.');
-        return await TemporaryCardsCollection.find(filter).countAsync();
+        return await TemporaryCardsCollection.find(checkedFilter(filter, TEMPORARY_CARD_FILTER)).countAsync();
     },
 };
 

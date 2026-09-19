@@ -10,11 +10,11 @@ type MeteorMethod = (this: Meteor.MethodThisType, ...args: any[]) => any
 const camMethods : {[x:string]:MeteorMethod} = {
 
     insertCam(data:Cam){
-        if (!data || !data.name || !data.streamurl) {
-            throw new Meteor.Error('invalid-cam', 'Cam must have a name and stream URL');
-        }
         if (!this.userId){
            throw new Meteor.Error('not-authorized', 'You must be logged in to insert a cam.');
+        }
+        if (!data || !data.name || !data.streamurl) {
+            throw new Meteor.Error('invalid-cam', 'Cam must have a name and stream URL');
         }
         return CamsCollection.insertAsync(data)
     },
@@ -104,6 +104,13 @@ const camMethods : {[x:string]:MeteorMethod} = {
         return CamZoneDefsCollection.removeAsync({ _id: id });
     },
     validateRtspLink(rtspLink:string){
+        // Every other method here checks the session first. This one did not,
+        // so an outsider could make the server run ffmpeg against any address
+        // they chose and read the outcome — a probe of the internal network,
+        // and a spawned process per call.
+        if (!this.userId) {
+            throw new Meteor.Error('not-authorized', 'You must be signed in.');
+        }
         this.unblock();
         if(!rtspLink || !rtspLink.startsWith('rtsp://')){
             throw new Meteor.Error('invalid-rtsp-link', 'Invalid RTSP link provided');

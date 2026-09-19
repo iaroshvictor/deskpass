@@ -1,6 +1,10 @@
 import { Meteor } from 'meteor/meteor';
 import { Accounts } from "meteor/accounts-base";
 import { clampLimit, clampSkip, sanitizeFilter, sanitizeSort } from '/imports/security/queryGuards';
+import {
+  VISIT_FILTER, INTRUDER_FILTER, ALERTS_FILTER, ACCESS_REPORT_FILTER,
+  CAPTION_FILTER, SCENARIO_EVENT_FILTER, TEMPORARY_CARD_FILTER, SUMMARY_FILTER,
+} from '/imports/security/filterSpecs';
 import { requireUser, requirePermission, isAdmin } from '/imports/security/guards';
 import { PERMISSIONS } from '/imports/security/accessPolicy';
 import { RolesCollection, RoleDefinitionsCollection } from '../imports/api/roles';
@@ -882,41 +886,6 @@ VisitsSummaryCollection.rawCollection().createIndex({ 'source': 1, 'timestamp': 
   // every reference visit in one subscription.
   const PAGE = { fallback: 100, max: 500 };
   const VISITS_PAGE = { fallback: 100, max: 100000 };
-
-  // Which fields each publication accepts a filter on, and which operators are
-  // allowed there. Taken from what the screens actually send; a field missing
-  // here is dropped from the filter rather than rejected, so an overlooked
-  // screen shows unfiltered data instead of erroring.
-  const VISIT_FILTER = { fields: {
-    tracking_id: [], source: ['$in'], reference: [], _id: ['$in'],
-    timestamp: ['$gte', '$lte'],
-  } };
-  const INTRUDER_FILTER = { fields: {
-    source: ['$in'], seen: [], tracking_id: [], timestamp: ['$gte', '$lte'],
-  } };
-  const ALERTS_FILTER = { fields: {
-    source: ['$in'], seen: [], seenBy: ['$ne'], label: [], timestamp: ['$gte', '$lte'],
-  } };
-  const ACCESS_REPORT_FILTER = { fields: {
-    idInfo: ['$in'], source: ['$in'], timestamp: ['$gte', '$lte'],
-  } };
-  const CAPTION_FILTER = { fields: {
-    source: [], camId: [], seen: [], timestamp: ['$gte', '$lte'],
-  } };
-  const SCENARIO_EVENT_FILTER = { fields: {
-    scenarioId: ['$in'], camId: ['$in'], seen: [], severity: ['$in'],
-    message: ['$regex', '$options'], triggeredAt: ['$gte', '$lte'],
-  } };
-  const TEMPORARY_CARD_FILTER = { fields: {
-    card: [], idInfo: ['$in'], source: ['$in'], attachedAt: ['$gte', '$lte'],
-  } };
-  const SUMMARY_FILTER = {
-    fields: {
-      _id: ['$in'], source: [], face_b64: ['$exists'], idInfo: ['$exists', '$in'],
-      'idInfo.cA': [], 'idInfo.divission': ['$in'], timestamp: ['$gte', '$lte'],
-    },
-    allowOr: true,
-  };
 
   Meteor.publish('allUsers', function(){
     if (!this.userId) return this.ready();
