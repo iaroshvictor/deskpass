@@ -235,6 +235,10 @@ export default function Desktop() {
     }, [loading, prepared]);
     const [startAnchorEl, setStartAnchorEl] = useState<null | HTMLElement>(null);
     const[searchApp, setSearchApp] = useState<string>('');
+    // start menu: focus the search box and scroll the app list down on open, so
+    // the user can type straight away without clicking into the field.
+    const startSearchRef = React.useRef<HTMLInputElement>(null);
+    const startListRef = React.useRef<HTMLDivElement>(null);
     const { width, height} = windowDimensions()
     const [lastActive, setLastActive] =useState<number | null>(null)
     const [time, setTime] = useState(new Date());
@@ -511,18 +515,42 @@ export default function Desktop() {
                     vertical: 'top',
                     horizontal: 'left',
                 }}
-                onClose={()=>setStartAnchorEl(null)}
+                onClose={()=>{ setStartAnchorEl(null); setSearchApp(''); }}
                 transformOrigin={{
                     vertical: 'bottom',
                     horizontal: 'left',
                 }}
+                // after the menu animates in: scroll the app list to the bottom and
+                // put the caret in the search box so typing filters immediately.
+                TransitionProps={{
+                    onEntered: () => {
+                        if (startListRef.current) {
+                            startListRef.current.scrollTop = startListRef.current.scrollHeight;
+                        }
+                        startSearchRef.current?.focus();
+                    },
+                }}
                 slotProps={{
                     paper: {
-                        sx: { background: 'rgba(0, 0, 0, 0.8)', p:3 }
-                    }
+                        sx: {
+                            // viewport-relative so the menu can never run off the top of
+                            // the screen (56px taskbar + 16px breathing room).
+                            maxHeight: 'calc(100vh - 72px)',
+                            width: 288,
+                            display: 'flex',
+                            flexDirection: 'column',
+                            overflow: 'hidden',
+                            background: 'rgba(16,16,20,0.92)',
+                            backdropFilter: 'blur(14px)',
+                            border: '1px solid rgba(255,255,255,0.12)',
+                            borderRadius: 2,
+                            boxShadow: '0 16px 48px rgba(0,0,0,.65)',
+                            p: 0,
+                        },
+                    },
                 }}
             >
-                <Box sx={{ minWidth:'200px', px:1, pb:1 }}>
+                <Box sx={{ flexShrink:0, px:2, pt:1.75, pb:1.25 }}>
                     <Typography variant='caption' sx={{ color:'rgba(255,255,255,0.5)', textTransform:'uppercase', letterSpacing:1 }}>Account</Typography>
                     <Stack direction='row' alignItems='center' justifyContent='space-between' sx={{ mt:0.5 }}>
                         <Stack direction='row' alignItems='center' spacing={1}>
@@ -541,13 +569,24 @@ export default function Desktop() {
                         </Button>
                     </Stack>
                 </Box>
-                <Divider sx={{ borderColor:'rgba(255,255,255,0.15)', mb:1 }}/>
-                <Box sx={{ minWidth:'200px',maxHeight:'900px', overflowY:'auto', display:'flex',alignItems:'flex-end' }}>
-                    <MenuList sx={{width:'100%'}}>
+                <Divider sx={{ borderColor:'rgba(255,255,255,0.12)' }}/>
+                {/* the only scrolling region — flex:1 + minHeight:0 lets it shrink
+                    inside the vh-capped paper so the search stays pinned below */}
+                <Box ref={startListRef} sx={{
+                    flex:1, minHeight:0, overflowY:'auto',
+                    '&::-webkit-scrollbar':{ width:6 },
+                    '&::-webkit-scrollbar-thumb':{ background:'rgba(255,255,255,0.18)', borderRadius:3 },
+                    '&::-webkit-scrollbar-thumb:hover':{ background:'rgba(255,255,255,0.3)' },
+                }}>
+                    <MenuList autoFocusItem={false} sx={{width:'100%', py:0.5}}>
                         {visibleIcons.filter(icon => icon.appName.toLowerCase().includes(searchApp.toLowerCase())).map((icon, index)=>(
-                            <MenuItem sx={{width:'100%'}} key={index} onClick={()=>{
+                            <MenuItem sx={{
+                                borderRadius:1, mx:0.5, px:1, py:0.75, minHeight:0,
+                                '&:hover':{ background:'rgba(255,255,255,0.09)' },
+                            }} key={index} onClick={()=>{
                                 launchApp(icon.appName)
                                 setStartAnchorEl(null)
+                                setSearchApp('')
                             }}>
                                 <ListItemIcon>
                                     <Badge   
@@ -568,26 +607,29 @@ export default function Desktop() {
                         ))}
                     </MenuList>
                 </Box>
-                <Divider/>
-                <TextField
-                    placeholder='Search app'
-                    variant='standard'
-                    value={searchApp}
-                    onChange={(e)=>setSearchApp(e.target.value)}
-                    sx={{
-                        width:'200px',
-                        m:1,
-                        color:'white',
-                        input:{color:'white'},
-                        label:{color:'white'},
-                        '& .MuiInput-underline:before':{
-                            borderBottomColor:'rgba(255, 255, 255, 0.5)'
-                        },
-                        '& .MuiInput-underline:hover:not(.Mui-disabled):before':{
-                            borderBottomColor:'rgba(255, 255, 255, 0.7)'
+                <Divider sx={{ borderColor:'rgba(255,255,255,0.12)' }}/>
+                {/* pinned below the scroll area — always reachable, never clipped */}
+                <Box sx={{ flexShrink:0, p:1.25 }}>
+                    <TextField
+                        inputRef={startSearchRef}
+                        autoFocus
+                        placeholder='Search app'
+                        variant='standard'
+                        fullWidth
+                        value={searchApp}
+                        onChange={(e)=>setSearchApp(e.target.value)}
+                        InputProps={{ disableUnderline:true }}
+                        sx={{
+                            px:1.25, py:0.5,
+                            background:'rgba(255,255,255,0.07)',
+                            border:'1px solid rgba(255,255,255,0.12)',
+                            borderRadius:1.5,
+                            input:{ color:'#fff', fontSize:14, padding:0 },
+                            '& input::placeholder':{ color:'rgba(255,255,255,0.45)', opacity:1 },
+                            '&:focus-within':{ borderColor:'rgba(255,255,255,0.35)', background:'rgba(255,255,255,0.1)' },
                         }}
-                    }
-                />
+                    />
+                </Box>
             </Popover>
             <Divider orientation="vertical" flexItem />
             <Stack sx={{width:'100%'}} direction='row' spacing={2}>
