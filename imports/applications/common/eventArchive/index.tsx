@@ -1,7 +1,7 @@
 // One archive for everything that raised an alarm.
 //
 // Until now the same question — "what happened, and has anyone looked at it?"
-// — was answered by two screens reading two collections: watch-list face
+// — was answered by two screens reading two collections: person-list face
 // matches (alertsArchive) and scenario engine firings (scenario_events_v2).
 // This screen puts them in one list.
 //
@@ -57,7 +57,7 @@ const PAGE = 50;
 // What the publications allow in one subscription (server/main.ts PAGE.max).
 const WINDOW_MAX = 500;
 
-type Source = 'all' | 'watchlist' | 'scenario';
+type Source = 'all' | 'personList' | 'scenario';
 
 const SEVERITY_COLOR: Record<string, 'info' | 'warning' | 'error'> = {
   info: 'info', warning: 'warning', critical: 'error',
@@ -87,17 +87,17 @@ const IDENTITY_LABEL: Record<string, string> = {
 /** One row of the merged list, whichever collection it came from. */
 type Row = {
   id: string;
-  source: 'watchlist' | 'scenario';
+  source: 'personList' | 'scenario';
   at: Date;
   severity: string;
   camId: string;
   what: string;              // the event sentence, or the person's name
-  detail: string;            // scenario name, or watch list name
+  detail: string;            // scenario name, or person list name
   seen: boolean;
   seenBy?: string;
   seenAt?: Date | null;
   suppressed?: boolean;      // a duplicate the server silenced, nobody looked
-  face?: string;             // base64 thumbnail, watch-list rows only
+  face?: string;             // base64 thumbnail, person-list rows only
   // Every filter on this screen has a column, so a narrowed list shows what
   // it was narrowed by. Scenario rows only.
   zone?: string;
@@ -116,7 +116,7 @@ const EventArchiveRenderer = () => {
   const [cams, setCams] = React.useState<string[]>([]);
   const [range, setRange] = React.useState<[Date, Date] | null>(null);
   const [unseenOnly, setUnseenOnly] = React.useState(false);
-  // Watch-list only, applied in the browser (see the note at the top).
+  // Person-list only, applied in the browser (see the note at the top).
   const [lists, setLists] = React.useState<string[]>([]);
   const [persons, setPersons] = React.useState<string[]>([]);
   // Scenario only.
@@ -148,21 +148,21 @@ const EventArchiveRenderer = () => {
   // Narrowing by something only one source has — a scenario, a severity, a
   // person — is a statement about what the operator is looking for, so the
   // other source steps aside. Without this, picking one scenario still left
-  // every watch-list match in the list and the filter looked broken.
+  // every person-list alert in the list and the filter looked broken.
   const scenarioNarrowed = scenarioIds.length > 0 || severities.length > 0 || message !== ''
     || conditions.length > 0 || identities.length > 0 || zones.length > 0 || lines.length > 0;
-  const watchlistNarrowed = lists.length > 0 || persons.length > 0;
-  const wantsWatchlist = source === 'watchlist'
-    || (source === 'all' && (!scenarioNarrowed || watchlistNarrowed));
+  const personListNarrowed = lists.length > 0 || persons.length > 0;
+  const wantsPersonList = source === 'personList'
+    || (source === 'all' && (!scenarioNarrowed || personListNarrowed));
   const wantsScenario = source === 'scenario'
-    || (source === 'all' && (!watchlistNarrowed || scenarioNarrowed));
+    || (source === 'all' && (!personListNarrowed || scenarioNarrowed));
   // Which controls are on screen is the tab's business alone. Tying it to the
   // filters too would hide the scenario controls the moment a person filter
   // was set, and there would be no way to narrow both at once.
-  const showWatchlistFilters = source !== 'scenario';
-  const showScenarioFilters = source !== 'watchlist';
+  const showPersonListFilters = source !== 'scenario';
+  const showScenarioFilters = source !== 'personList';
   const hiddenBySource = source !== 'all' ? null
-    : !wantsWatchlist ? 'Watch-list matches are hidden while a scenario filter is set.'
+    : !wantsPersonList ? 'Person-list alerts are hidden while a scenario filter is set.'
     : !wantsScenario ? 'Scenario events are hidden while a person or list filter is set.'
     : null;
 
@@ -192,7 +192,7 @@ const EventArchiveRenderer = () => {
   // of zero does not do that — clampLimit reads zero as "unset" and hands
   // back the default page — but an undefined name skips the hook's work.
   const windowSize = Math.min((page + 1) * PAGE, WINDOW_MAX);
-  useSubscribe(wantsWatchlist ? 'alertsArchive' : undefined,
+  useSubscribe(wantsPersonList ? 'alertsArchive' : undefined,
     alertFilter, windowSize, 0, { timestamp: -1 });
   useSubscribe(wantsScenario ? 'scenario_events_v2' : undefined,
     scenarioFilter, windowSize, 0, { triggeredAt: -1 });
@@ -244,16 +244,16 @@ const EventArchiveRenderer = () => {
   const rows: Row[] = React.useMemo(() => {
     const out: Row[] = [];
 
-    if (wantsWatchlist) {
+    if (wantsPersonList) {
       for (const a of alerts) {
         // The publication cannot filter on these two, so they are applied here.
         if (lists.length && !lists.includes(a.listId)) continue;
         if (persons.length && !persons.includes(String(a.idInfo))) continue;
         out.push({
           id: a._id as string,
-          source: 'watchlist',
+          source: 'personList',
           at: a.timestamp,
-          // A watch-list match has no severity of its own; it is an alarm about
+          // A person-list alert has no severity of its own; it is an alarm about
           // a specific person, which is what "warning" means on this screen.
           severity: 'warning',
           camId: a.source,
@@ -295,7 +295,7 @@ const EventArchiveRenderer = () => {
     }
 
     return out.sort((x, y) => y.at.getTime() - x.at.getTime());
-  }, [alerts, events, wantsWatchlist, wantsScenario, lists, persons, conditions, identities,
+  }, [alerts, events, wantsPersonList, wantsScenario, lists, persons, conditions, identities,
       alertLists, people, camList, scenarioOf, zoneDefs, lineDefs]);
 
   const pageRows = rows.slice(page * PAGE, (page + 1) * PAGE);
@@ -313,12 +313,12 @@ const EventArchiveRenderer = () => {
   const canGoOlder = !windowFull && rows.length >= (page + 1) * PAGE;
 
   const markSeen = (row: Row) => {
-    if (row.source === 'watchlist') Meteor.callAsync('setSeenAlert', row.id);
+    if (row.source === 'personList') Meteor.callAsync('setSeenAlert', row.id);
     else Meteor.callAsync('markScenarioEventsV2Seen', [row.id]);
   };
 
   const markAllSeen = () => {
-    if (wantsWatchlist) Meteor.callAsync('setAllAlertsSeen');
+    if (wantsPersonList) Meteor.callAsync('setAllAlertsSeen');
     if (wantsScenario) Meteor.callAsync('markScenarioEventsV2Seen');
   };
 
@@ -331,7 +331,7 @@ const EventArchiveRenderer = () => {
 
       <Tabs value={source} onChange={(_e, v: Source) => { setSource(v); setPage(0); }} sx={{ mb: 2 }}>
         <Tab value="all" label="All events" />
-        <Tab value="watchlist" label="Watch lists" />
+        <Tab value="personList" label="Person lists" />
         <Tab value="scenario" label="Scenarios" />
       </Tabs>
 
@@ -365,7 +365,7 @@ const EventArchiveRenderer = () => {
 
       {/* ── filters that only make sense for one source ── */}
       <Stack direction="row" spacing={2} alignItems="center" sx={{ mb: 2, flexWrap: 'wrap', gap: 1 }}>
-        {showWatchlistFilters && (
+        {showPersonListFilters && (
           <>
             <Autocomplete
               sx={{ minWidth: 200, flex: 1 }} multiple options={alertLists} size="small"
@@ -492,7 +492,7 @@ const EventArchiveRenderer = () => {
               <TableCell sx={{ whiteSpace: 'nowrap' }}>{row.at.toLocaleString()}</TableCell>
               <TableCell>
                 <Chip size="small" variant="outlined"
-                  label={row.source === 'watchlist' ? 'watch list' : 'scenario'} />
+                  label={row.source === 'personList' ? 'person list' : 'scenario'} />
               </TableCell>
               <TableCell>
                 <Chip size="small" color={SEVERITY_COLOR[row.severity] ?? 'default'} label={row.severity} />
@@ -525,7 +525,7 @@ const EventArchiveRenderer = () => {
                       Mark seen
                     </Button>
                   )}
-                  {row.source === 'watchlist' && (
+                  {row.source === 'personList' && (
                     <Button onClick={() => setDetailsOf(row.id)} startIcon={<PageviewIcon />}>
                       Details
                     </Button>

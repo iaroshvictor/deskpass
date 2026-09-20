@@ -193,7 +193,7 @@ const AlertsArchive: AppType = {
     appIcon: <Icon />,
     render: AlertsArchiveRenderer,
     module: 'personAlert',
-    // Superseded by Event Archive, which shows watch-list matches and scenario
+    // Superseded by Event Archive, which shows person-list alerts and scenario
     // firings in one list. Kept whole and reachable in code: drop this flag to
     // put the shortcut back.
     hideShortcut: true,
