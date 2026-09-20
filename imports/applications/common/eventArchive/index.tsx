@@ -31,7 +31,7 @@ import { Meteor } from 'meteor/meteor';
 import {
   Autocomplete, Paper, TextField, Stack, Table, TableCell, TableHead, TableRow,
   TableBody, ButtonGroup, Button, Chip, ToggleButton, ToggleButtonGroup,
-  Typography, FormControlLabel, Switch, Tabs, Tab, Box,
+  Typography, FormControlLabel, Switch, Tabs, Tab, Box, CircularProgress,
 } from '@mui/material';
 import { useFind, useSubscribe } from 'meteor/react-meteor-data';
 import DateRangePicker from 'rsuite/DateRangePicker';
@@ -232,12 +232,16 @@ const EventArchiveRenderer = () => {
   // of zero does not do that — clampLimit reads zero as "unset" and hands
   // back the default page — but an undefined name skips the hook's work.
   const windowSize = Math.min((page + 1) * PAGE, WINDOW_MAX);
-  useSubscribe(wantsPersonList ? 'alertsArchive' : undefined,
+  const personListLoading = useSubscribe(wantsPersonList ? 'alertsArchive' : undefined,
     alertFilter, windowSize, 0, { timestamp: -1 });
-  useSubscribe(wantsScenario ? 'scenario_events_v2' : undefined,
+  const scenarioLoading = useSubscribe(wantsScenario ? 'scenario_events_v2' : undefined,
     scenarioFilter, windowSize, 0, { triggeredAt: -1 });
-  useSubscribe(wantsIntruder ? 'intruderAlerts' : undefined,
+  const intruderLoading = useSubscribe(wantsIntruder ? 'intruderAlerts' : undefined,
     intruderFilter, windowSize, 0, { timestamp: -1 });
+  // True while any source is still fetching. Turning a page or changing a
+  // filter restarts a subscription, and until it is ready the table shows
+  // whatever the previous one left behind — better covered than half true.
+  const loading = personListLoading() || scenarioLoading() || intruderLoading();
   useSubscribe('cams');
   useSubscribe('alertLists');
   useSubscribe('visitSummaryMeta');
@@ -380,18 +384,37 @@ const EventArchiveRenderer = () => {
 
   const pageRows = rows.slice(page * PAGE, (page + 1) * PAGE);
   // Thirteen columns of mostly dashes helps nobody, so a column appears only
-  // when there is something to put in it — judged on everything loaded, not
-  // on the page being shown. Judging by the page made the table change shape
-  // while paging through it: with the newest events all from scenarios, the
-  // photograph column was absent on page one and appeared on page two,
-  // shifting every column right.
-  const shows = {
+  // when there is something to put in it.
+  const needed = {
     zone: rows.some(r => r.zone),
     line: rows.some(r => r.line),
     condition: rows.some(r => r.condition),
     identity: rows.some(r => r.identity),
     face: rows.some(r => r.face),
   };
+
+  // …but once needed, it stays for as long as the view does. Deciding afresh
+  // on every render makes the table shift under the reader: turning a page
+  // grows the window, which restarts the subscriptions, and in that gap the
+  // rows carrying photographs can be absent for a moment. The column would
+  // vanish and come back. A change of tab or filter starts the reckoning
+  // again, because then the reader expects a different table.
+  const viewKey = JSON.stringify([source, cams, range, unseenOnly, lists, persons,
+    scenarioIds, severities, message, conditions, identities, zones, lines, sides]);
+  const sticky = React.useRef({ key: viewKey, shows: needed });
+  if (sticky.current.key !== viewKey) {
+    sticky.current = { key: viewKey, shows: needed };
+  } else {
+    const kept = sticky.current.shows;
+    sticky.current.shows = {
+      zone: kept.zone || needed.zone,
+      line: kept.line || needed.line,
+      condition: kept.condition || needed.condition,
+      identity: kept.identity || needed.identity,
+      face: kept.face || needed.face,
+    };
+  }
+  const shows = sticky.current.shows;
   const columnCount = 8 + Object.values(shows).filter(Boolean).length;
   const windowFull = windowSize >= WINDOW_MAX;
   const canGoOlder = !windowFull && rows.length >= (page + 1) * PAGE;
@@ -564,6 +587,7 @@ const EventArchiveRenderer = () => {
       <Box sx={{ mb: 1 }} />
 
       {/* ── one list ── */}
+      <Box sx={{ position: 'relative' }}>
       <Table size="small">
         <TableHead>
           <TableRow>
@@ -649,6 +673,16 @@ const EventArchiveRenderer = () => {
           )}
         </TableBody>
       </Table>
+      {loading && (
+        <Box sx={{
+          position: 'absolute', inset: 0, zIndex: 2,
+          display: 'flex', alignItems: 'flex-start', justifyContent: 'center', pt: 8,
+          backgroundColor: 'rgba(from var(--mui-palette-background-paper) r g b / 0.72)',
+        }}>
+          <CircularProgress size={30} />
+        </Box>
+      )}
+      </Box>
 
       <Stack direction="row" justifyContent="center" alignItems="center" sx={{ mt: 1 }} spacing={2}>
         <ButtonGroup size="small">
