@@ -299,14 +299,18 @@ const EventArchiveRenderer = () => {
       alertLists, people, camList, scenarioOf, zoneDefs, lineDefs]);
 
   const pageRows = rows.slice(page * PAGE, (page + 1) * PAGE);
-  // Thirteen columns of mostly dashes helps nobody: each of these appears
-  // when the rows on screen have something to put in it.
+  // Thirteen columns of mostly dashes helps nobody, so a column appears only
+  // when there is something to put in it — judged on everything loaded, not
+  // on the page being shown. Judging by the page made the table change shape
+  // while paging through it: with the newest events all from scenarios, the
+  // photograph column was absent on page one and appeared on page two,
+  // shifting every column right.
   const shows = {
-    zone: pageRows.some(r => r.zone),
-    line: pageRows.some(r => r.line),
-    condition: pageRows.some(r => r.condition),
-    identity: pageRows.some(r => r.identity),
-    face: pageRows.some(r => r.face),
+    zone: rows.some(r => r.zone),
+    line: rows.some(r => r.line),
+    condition: rows.some(r => r.condition),
+    identity: rows.some(r => r.identity),
+    face: rows.some(r => r.face),
   };
   const columnCount = 8 + Object.values(shows).filter(Boolean).length;
   const windowFull = windowSize >= WINDOW_MAX;
