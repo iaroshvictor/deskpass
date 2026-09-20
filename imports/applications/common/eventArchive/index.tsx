@@ -49,6 +49,8 @@ import { AlertLists as AlertListsCollection } from '/imports/api/alertLists';
 import { VisitSummaryMetaCollection } from '/imports/api/visitSummary';
 import { UsersMetaCollection } from '/imports/api/operatorsMeta';
 import { ScenariosV2Collection, ScenarioEventsV2Collection } from '/imports/api/scenarioModel';
+import { CamZoneDefsCollection } from '/imports/api/camZoneDefs';
+import { CamLineDefsCollection } from '/imports/api/camLineDefs';
 import AlertItemModal from '/imports/applications/personAlert/alertsArchive/itemModal';
 
 const PAGE = 50;
@@ -122,6 +124,11 @@ const EventArchiveRenderer = () => {
   // the condition on the event, or a whitelist entry and a lookup.
   const [conditions, setConditions] = React.useState<string[]>([]);
   const [identities, setIdentities] = React.useState<string[]>([]);
+  // Unlike the two above, these are on the event itself and whitelisted in the
+  // publication, so the server does the narrowing and the whole archive is
+  // searched — not just the window on screen.
+  const [zones, setZones] = React.useState<string[]>([]);
+  const [lines, setLines] = React.useState<string[]>([]);
 
   const reset = <T,>(set: (v: T) => void) => (v: T) => { set(v); setPage(0); };
 
@@ -137,7 +144,7 @@ const EventArchiveRenderer = () => {
   // other source steps aside. Without this, picking one scenario still left
   // every watch-list match in the list and the filter looked broken.
   const scenarioNarrowed = scenarioIds.length > 0 || severities.length > 0 || message !== ''
-    || conditions.length > 0 || identities.length > 0;
+    || conditions.length > 0 || identities.length > 0 || zones.length > 0 || lines.length > 0;
   const watchlistNarrowed = lists.length > 0 || persons.length > 0;
   const wantsWatchlist = source === 'watchlist'
     || (source === 'all' && (!scenarioNarrowed || watchlistNarrowed));
@@ -169,8 +176,10 @@ const EventArchiveRenderer = () => {
     if (scenarioIds.length) f.scenarioId = { $in: scenarioIds };
     if (severities.length) f.severity = { $in: severities };
     if (message) f.message = { $regex: message, $options: 'i' };
+    if (zones.length) f.zoneDefId = { $in: zones };
+    if (lines.length) f.lineDefId = { $in: lines };
     return f;
-  }, [cams, unseenOnly, range, scenarioIds, severities, message]);
+  }, [cams, unseenOnly, range, scenarioIds, severities, message, zones, lines]);
 
   // Everything down to the current page, in one subscription per source.
   // A source that is not on screen is not subscribed at all: passing a limit
@@ -186,12 +195,16 @@ const EventArchiveRenderer = () => {
   useSubscribe('visitSummaryMeta');
   useSubscribe('usersMeta');
   useSubscribe('scenarios_v2');
+  useSubscribe('cam_zone_defs');
+  useSubscribe('cam_line_defs');
 
   const camList = useFind(() => CamsCollection.find({}));
   const alertLists = useFind(() => AlertListsCollection.find({}));
   const people = useFind(() => VisitSummaryMetaCollection.find({}));
   const operators = useFind(() => UsersMetaCollection.find({}));
   const scenarios = useFind(() => ScenariosV2Collection.find({}));
+  const zoneDefs = useFind(() => CamZoneDefsCollection.find({}));
+  const lineDefs = useFind(() => CamLineDefsCollection.find({}));
 
   const alerts = useFind(() => AlertsArchiveCollection.find(alertFilter, {
     sort: { timestamp: -1 }, limit: windowSize,
@@ -358,6 +371,24 @@ const EventArchiveRenderer = () => {
               onChange={(_e, value) => reset(setScenarioIds)(value.map(v => v._id as string))}
               renderInput={(p) => <TextField {...p} label="Scenario" variant="outlined" />}
             />
+            {zoneDefs.length > 0 && (
+              <Autocomplete
+                sx={{ minWidth: 170, flex: 1 }} multiple options={zoneDefs} size="small"
+                getOptionLabel={(o) => o.label || ''} getOptionKey={(o) => o._id || ''}
+                value={zoneDefs.filter(z => zones.includes(z._id as string))}
+                onChange={(_e, value) => reset(setZones)(value.map(v => v._id as string))}
+                renderInput={(p) => <TextField {...p} label="Zone" variant="outlined" />}
+              />
+            )}
+            {lineDefs.length > 0 && (
+              <Autocomplete
+                sx={{ minWidth: 170, flex: 1 }} multiple options={lineDefs} size="small"
+                getOptionLabel={(o) => o.label || ''} getOptionKey={(o) => o._id || ''}
+                value={lineDefs.filter(l => lines.includes(l._id as string))}
+                onChange={(_e, value) => reset(setLines)(value.map(v => v._id as string))}
+                renderInput={(p) => <TextField {...p} label="Line" variant="outlined" />}
+              />
+            )}
             {conditionOptions.length > 1 && (
               <Autocomplete
                 sx={{ minWidth: 180, flex: 1 }} multiple options={conditionOptions} size="small"

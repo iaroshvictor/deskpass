@@ -97,6 +97,14 @@ async function clean(db) {
  */
 async function seedScenarios(db, camIds, camNames) {
 // --- scenarios -----------------------------------------------------------
+// A zone or line scenario watches a shared definition placed on one or more
+// cameras, and every event it fires carries that definition's id. Without at
+// least one of each, nothing in the database exercises the archive's zone and
+// line filters — or the engine's own zone handling.
+const zoneDefs = await db.collection('cam_zone_defs').find({ [MARKER]: true }).toArray();
+const lineDefs = await db.collection('cam_line_defs').find({ [MARKER]: true }).toArray();
+const zoneDefId = zoneDefs[0] ? String(zoneDefs[0]._id) : undefined;
+const lineDefId = lineDefs[0] ? String(lineDefs[0]._id) : undefined;
 // The conditions below are the ones the engine and the builder actually
 // speak (imports/api/scenarioModel.ts). An invented shape would seed a
 // database no running system could produce, and the screens that read the
@@ -111,9 +119,17 @@ const scenarioDefs = [
   },
   {
     name: 'Crowd at the main entrance', severity: 'warning', enabled: true,
+    scope: zoneDefId ? { kind: 'zone', zoneDefId } : undefined,
     condition: { kind: 'count', op: 'gte', value: 3 },
     details: (i) => ({ count: 3 + (i % 4) }),
     message: (cam) => `Too many people on ${cam}`,
+  },
+  {
+    name: 'Crossing the loading dock line', severity: 'warning', enabled: true,
+    scope: lineDefId ? { kind: 'line', lineDefId } : undefined,
+    condition: { kind: 'crossing', direction: 'any' },
+    details: (i) => ({ tid: 3000 + i, to: i % 2 ? 'in' : 'out' }),
+    message: (cam) => `Line crossed on ${cam}`,
   },
   {
     name: 'Movement after hours', severity: 'info', enabled: false,
@@ -146,7 +162,7 @@ for (let i = 0; i < scenarioDefs.length; i++) {
   const { insertedId } = await db.collection('scenarios_v2').insertOne(seeded({
     name: d.name,
     enabled: d.enabled,
-    scope: { kind: 'cams', camIds: [camIds[i % camIds.length]] },
+    scope: d.scope ?? { kind: 'cams', camIds: [camIds[i % camIds.length]] },
     rule: { condition: d.condition },
     ...(d.schedule ? { schedule: d.schedule } : {}),
     severity: d.severity,
@@ -167,6 +183,10 @@ for (let i = 0; i < 55; i++) {
     scenarioName: d.name,
     severity: d.severity,
     camId: camIds[i % camIds.length],
+    // The engine stamps the watched definition onto every event it fires, so
+    // the archive can group by zone or line across cameras.
+    ...(d.scope?.zoneDefId ? { zoneDefId: d.scope.zoneDefId } : {}),
+    ...(d.scope?.lineDefId ? { lineDefId: d.scope.lineDefId } : {}),
     message: d.message(cam),
     details: d.details(i),
     triggeredAt: minutesAgo(i * 19),

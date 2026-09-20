@@ -35,6 +35,10 @@ export const CAPTION_FILTER = { fields: {
 export const SCENARIO_EVENT_FILTER = { fields: {
   scenarioId: ['$in'], camId: ['$in'], seen: [], severity: ['$in'],
   message: ['$regex', '$options'], triggeredAt: ['$gte', '$lte'],
+  // A zone or line scenario records which shared definition it was watching,
+  // so "everything that happened at the loading dock" is a question the
+  // archive can answer across cameras.
+  zoneDefId: ['$in'], lineDefId: ['$in'],
 } };
 
 export const TEMPORARY_CARD_FILTER = { fields: {

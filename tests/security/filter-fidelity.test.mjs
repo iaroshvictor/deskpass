@@ -31,7 +31,11 @@ describe('publications honour the filters the screens send', () => {
     // database happens to hold.
     fixtures.cam = (await db.collection('cams').findOne({}))?._id;
     fixtures.person = (await db.collection('visitsSummary').findOne({}))?._id;
-    fixtures.scenarioWord = 'Lobby';
+    // Taken from a message that exists rather than written in: the wording of
+    // a seeded event is not a contract, and a word that has fallen out of it
+    // fails this test for the wrong reason.
+    const anyEvent = await db.collection('scenario_events_v2').findOne({ message: { $type: 'string' } });
+    fixtures.scenarioWord = anyEvent?.message.split(/\s+/).find((w) => /^[A-Za-z]{4,}$/.test(w)) ?? null;
     // Pick a camera that actually has an unseen caption, rather than assuming
     // the first one does: an empty result would fail for lack of data rather
     // than for a lost filter.
@@ -136,7 +140,8 @@ describe('publications honour the filters the screens send', () => {
     });
   });
 
-  test('scenario archive: free-text search on the message', async () => {
+  test('scenario archive: free-text search on the message', async (t) => {
+    if (!fixtures.scenarioWord) return t.skip('no scenario events with a message in the database');
     await check({
       screen: 'Scenario Archive (search box)',
       pub: 'scenario_events_v2', collection: 'scenario_events_v2',
