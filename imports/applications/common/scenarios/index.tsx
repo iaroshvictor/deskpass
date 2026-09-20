@@ -184,6 +184,15 @@ const Composer = ({ open, initial, onClose }: {
   const lineDefs = useFind(() => CamLineDefsCollection.find({}));
   const statuses = useFind(() => CamLiveStatusCollection.find({}));
 
+  // "Offline" is the absence of news, and absence does not arrive as an
+  // update: without a tick of its own this panel would keep saying online
+  // about a camera that went quiet.
+  const [, tick] = React.useReducer((n: number) => n + 1, 0);
+  React.useEffect(() => {
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, []);
+
   const c = draft.rule.condition;
   const scope = draft.scope;
   const setCondition = (condition: Condition) => {

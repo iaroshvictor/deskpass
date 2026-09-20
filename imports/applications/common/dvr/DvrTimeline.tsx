@@ -44,6 +44,17 @@ export const DvrTimeline: React.FC<Props> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const [dragging, setDragging]  = useState(false);
 
+  // A recording still being written has no end time and is drawn up to now.
+  // Nothing in the data changes while it grows, so the bar needs a tick of
+  // its own to keep extending; only while such a recording exists.
+  const ongoing = recordings.some((r) => !r.endedAt);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (!ongoing) return;
+    const id = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [ongoing]);
+
   const rangeMs = viewEnd - viewStart;
 
   const pct = useCallback((ms: number) =>
@@ -150,7 +161,7 @@ export const DvrTimeline: React.FC<Props> = ({
             }}>
               {camRecs.map(rec => {
                 const rStart = Math.max(rec.startedAt.getTime(), viewStart);
-                const rEnd   = Math.min((rec.endedAt?.getTime() ?? Date.now()), viewEnd);
+                const rEnd   = Math.min((rec.endedAt?.getTime() ?? nowMs), viewEnd);
                 if (rEnd <= rStart) return null;
                 const left  = pct(rStart);
                 const width = pct(rEnd) - left;
