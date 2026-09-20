@@ -90,6 +90,12 @@ export const SCREENS = [
     submits: ['doApolloSync', 'getBotLink', 'setApacsConfig', 'setDvrConfig', 'setTgBot'],
   },
   {
+    file: 'imports/applications/common/eventArchive/index.tsx',
+    title: 'Event archive',
+    kind: 'action',
+    submits: ['markScenarioEventsV2Seen', 'setAllAlertsSeen', 'setSeenAlert'],
+  },
+  {
     file: 'imports/applications/common/enrollPerson/index.tsx',
     title: 'Enroll person',
     kind: 'action',

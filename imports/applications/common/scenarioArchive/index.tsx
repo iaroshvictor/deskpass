@@ -180,5 +180,9 @@ const ScenarioArchiveApp: AppType = {
   appName: 'Scenario Archive',
   render: ScenarioArchiveRenderer,
   appIcon: <Icon />,
+  // Superseded by Event Archive, which shows scenario firings and watch-list
+  // matches in one list. Kept whole and reachable in code: drop this flag to
+  // put the shortcut back.
+  hideShortcut: true,
 };
 export default ScenarioArchiveApp;

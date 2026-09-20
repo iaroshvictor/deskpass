@@ -13,6 +13,7 @@ import Operators from './Operators';
 import Settings from './Settings'
 import ScenariosApp from './scenarios';
 import ScenarioArchiveApp from './scenarioArchive';
+import EventArchiveApp from './eventArchive';
 
 // Server methods live in ./methods.ts — importing them here would ship them to
 // the browser along with this barrel.
@@ -34,4 +35,5 @@ export default {
     RoleBuilderApp,
     ScenariosApp,
     ScenarioArchiveApp,
+    EventArchiveApp,
 };
