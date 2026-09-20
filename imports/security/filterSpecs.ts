@@ -18,6 +18,10 @@ export const VISIT_FILTER = { fields: {
 
 export const INTRUDER_FILTER = { fields: {
   source: ['$in'], seen: [], tracking_id: [], timestamp: ['$gte', '$lte'],
+  // A crossing records which line was crossed and from which side.
+  // `triggerLine` is a shared line definition id — the same vocabulary a
+  // zone or line scenario uses — so one filter can ask both about a door.
+  triggerLine: ['$in'], triggerSide: ['$in'],
 } };
 
 export const ALERTS_FILTER = { fields: {

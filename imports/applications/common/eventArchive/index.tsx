@@ -80,6 +80,13 @@ const CONDITION_LABEL: Record<string, string> = {
   scene: 'scene keyword',
 };
 
+// Which way someone went through a line. A vertical line sorts people left
+// and right, a horizontal one above and below.
+const SIDE_LABEL: Record<string, string> = {
+  left: 'to the left', right: 'to the right',
+  above: 'upwards', below: 'downwards',
+};
+
 const IDENTITY_LABEL: Record<string, string> = {
   any: 'anyone',
   known: 'recognised',
@@ -138,6 +145,8 @@ const EventArchiveRenderer = () => {
   // searched — not just the window on screen.
   const [zones, setZones] = React.useState<string[]>([]);
   const [lines, setLines] = React.useState<string[]>([]);
+  // Intruder crossings only.
+  const [sides, setSides] = React.useState<string[]>([]);
 
   const reset = <T,>(set: (v: T) => void) => (v: T) => { set(v); setPage(0); };
 
@@ -159,22 +168,31 @@ const EventArchiveRenderer = () => {
   // something only one source has speaks for the screen, and the sources that
   // cannot answer it step aside. Intruder crossings have no filter of their
   // own, so they show whenever nothing source-specific is asked for.
-  const narrowedToNothingInParticular = !personListNarrowed && !scenarioNarrowed;
+  // A line is a door, and both scenarios and crossings can be asked about
+  // one, so that filter speaks for both.
+  const intruderNarrowed = lines.length > 0 || sides.length > 0;
+  const nothingInParticular = !personListNarrowed && !scenarioNarrowed && !intruderNarrowed;
   const wantsPersonList = source === 'personList'
-    || (source === 'all' && (narrowedToNothingInParticular || personListNarrowed));
+    || (source === 'all' && (nothingInParticular || personListNarrowed));
   const wantsScenario = source === 'scenario'
-    || (source === 'all' && (narrowedToNothingInParticular || scenarioNarrowed));
+    || (source === 'all' && (nothingInParticular || scenarioNarrowed));
   const wantsIntruder = source === 'intruder'
-    || (source === 'all' && narrowedToNothingInParticular);
+    || (source === 'all' && (nothingInParticular || intruderNarrowed));
   // Which controls are on screen is the tab's business alone. Tying it to the
   // filters too would hide the scenario controls the moment a person filter
   // was set, and there would be no way to narrow both at once.
   const showPersonListFilters = source === 'all' || source === 'personList';
   const showScenarioFilters = source === 'all' || source === 'scenario';
-  const hiddenBySource = source !== 'all' ? null
-    : !wantsPersonList ? 'Person-list alerts and intruder crossings are hidden while a scenario filter is set.'
-    : !wantsScenario ? 'Scenario events and intruder crossings are hidden while a person or list filter is set.'
-    : null;
+  const showIntruderFilters = source === 'all' || source === 'intruder';
+  // Say which sources the filters have excluded rather than leave the
+  // operator counting what is missing.
+  const hidden = [
+    !wantsPersonList && 'person-list alerts',
+    !wantsScenario && 'scenario events',
+    !wantsIntruder && 'intruder crossings',
+  ].filter(Boolean) as string[];
+  const hiddenBySource = source !== 'all' || !hidden.length ? null
+    : `Hidden by the filters above: ${hidden.join(', ')}.`;
 
   const alertFilter = React.useMemo(() => {
     const f: { [k: string]: any } = {};
@@ -191,8 +209,10 @@ const EventArchiveRenderer = () => {
     if (cams.length) f.source = { $in: cams };
     if (unseenOnly) f.seen = false;
     if (range) f.timestamp = { $gte: range[0], $lte: range[1] };
+    if (lines.length) f.triggerLine = { $in: lines };
+    if (sides.length) f.triggerSide = { $in: sides };
     return f;
-  }, [cams, unseenOnly, range]);
+  }, [cams, unseenOnly, range, lines, sides]);
 
   const scenarioFilter = React.useMemo(() => {
     const f: { [k: string]: any } = {};
@@ -322,8 +342,12 @@ const EventArchiveRenderer = () => {
     if (wantsIntruder) {
       for (const i of intruders) {
         const cam = camList.find(c => c._id === i.source);
+        // The line is a shared definition, so it has a name even when this
+        // camera has no local label for it.
         const lineLabel = i.triggerLine
-          ? (cam?.lines?.find(l => l.lineId === i.triggerLine)?.label ?? i.triggerLine)
+          ? (cam?.lines?.find(l => l.lineId === i.triggerLine)?.label
+             ?? lineDefs.find(l => l._id === i.triggerLine)?.label
+             ?? i.triggerLine)
           : undefined;
         out.push({
           id: i._id as string,
@@ -334,7 +358,7 @@ const EventArchiveRenderer = () => {
           severity: 'critical',
           camId: i.source,
           what: lineLabel
-            ? `Intruder crossed «${lineLabel}» → ${i.triggerSide ?? '?'}`
+            ? `Intruder crossed «${lineLabel}» ${SIDE_LABEL[i.triggerSide ?? ''] ?? i.triggerSide ?? ''}`.trim()
             : 'Intruder detected',
           detail: '—',
           line: lineLabel,
@@ -456,6 +480,24 @@ const EventArchiveRenderer = () => {
             />
           </>
         )}
+        {(showScenarioFilters || showIntruderFilters) && lineDefs.length > 0 && (
+          <Autocomplete
+            sx={{ minWidth: 170, flex: 1 }} multiple options={lineDefs} size="small"
+            getOptionLabel={(o) => o.label || ''} getOptionKey={(o) => o._id || ''}
+            value={lineDefs.filter(l => lines.includes(l._id as string))}
+            onChange={(_e, value) => reset(setLines)(value.map(v => v._id as string))}
+            renderInput={(p) => <TextField {...p} label="Line" variant="outlined" />}
+          />
+        )}
+        {showIntruderFilters && (
+          <Autocomplete
+            sx={{ minWidth: 170, flex: 1 }} multiple options={Object.keys(SIDE_LABEL)} size="small"
+            getOptionLabel={(o) => SIDE_LABEL[o] ?? o}
+            value={sides}
+            onChange={(_e, value) => reset(setSides)(value)}
+            renderInput={(p) => <TextField {...p} label="Direction" variant="outlined" />}
+          />
+        )}
         {showScenarioFilters && (
           <>
             <Autocomplete
@@ -474,15 +516,7 @@ const EventArchiveRenderer = () => {
                 renderInput={(p) => <TextField {...p} label="Zone" variant="outlined" />}
               />
             )}
-            {lineDefs.length > 0 && (
-              <Autocomplete
-                sx={{ minWidth: 170, flex: 1 }} multiple options={lineDefs} size="small"
-                getOptionLabel={(o) => o.label || ''} getOptionKey={(o) => o._id || ''}
-                value={lineDefs.filter(l => lines.includes(l._id as string))}
-                onChange={(_e, value) => reset(setLines)(value.map(v => v._id as string))}
-                renderInput={(p) => <TextField {...p} label="Line" variant="outlined" />}
-              />
-            )}
+
             {conditionOptions.length > 1 && (
               <Autocomplete
                 sx={{ minWidth: 180, flex: 1 }} multiple options={conditionOptions} size="small"

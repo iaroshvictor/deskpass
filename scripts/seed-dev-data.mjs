@@ -237,6 +237,23 @@ async function seed(db) {
     }));
   }
 
+  // Every camera carries the shared line definitions, so a crossing has a
+  // label on the camera it happened on. The definitions only exist after the
+  // loop above, which is why this is a second pass rather than part of the
+  // camera fixture.
+  const drawnLines = await db.collection('cam_line_defs').find({ [MARKER]: true }).toArray();
+  await db.collection('cams').updateMany({ [MARKER]: true }, {
+    $set: {
+      lines: drawnLines.map((def, n) => ({
+        lineId: String(def._id),
+        label: def.label,
+        orientation: def.orientation ?? (n % 2 ? 'h' : 'v'),
+        top: 0.5, bottom: 0.5, left: 0.5, right: 0.5,
+        lineColor: '#FF4444',
+      })),
+    },
+  });
+
   const controllerIds = [];
   for (const [name, address] of [['Controller A', '192.168.10.11'], ['Controller B', '192.168.10.12']]) {
     const { insertedId } = await db.collection('controllers').insertOne(seeded({
@@ -337,8 +354,17 @@ async function seed(db) {
   await db.collection('accessReports').insertMany(reports);
 
   // --- alerts --------------------------------------------------------------
+  // A crossing records the line it happened on, by shared definition id, and
+  // which way the person went. Written by the server at server/main.ts; a
+  // seeded alert without them reads "Intruder detected" and leaves the
+  // archive's line and direction filters with nothing to match.
+  const camLines = await db.collection('cam_line_defs').find({ [MARKER]: true }).toArray();
+  const sidesFor = (orientation) => orientation === 'h' ? ['above', 'below'] : ['left', 'right'];
+
   const intruders = [];
   for (let i = 0; i < 45; i++) {
+    const def = camLines.length ? camLines[i % camLines.length] : null;
+    const orientation = i % 2 ? 'h' : 'v';
     intruders.push(seeded({
       face_b64: PLACEHOLDER_IMAGE,
       person_b64: PLACEHOLDER_IMAGE,
@@ -348,6 +374,12 @@ async function seed(db) {
       face_box: box(),
       person_box: box(),
       source: camIds[i % camIds.length],
+      ...(def ? {
+        triggerLine: String(def._id),
+        // Halve the index before picking a side: using i itself would track
+        // the orientation above and only ever yield one side of each pair.
+        triggerSide: pick(sidesFor(orientation), i >> 1),
+      } : {}),
       seen: i % 3 !== 0,
       seenBy: i % 3 !== 0 ? 'admin' : null,
       seenAt: i % 3 !== 0 ? minutesAgo(i * 30) : null,
