@@ -7,16 +7,29 @@ import { CamsCollection, Cam } from '/imports/api/cams';
 import { SettingsCollection, DVRConfig, DVR_DEFAULTS } from '/imports/api/settings';
 import { RecordingsCollection } from '/imports/api/recordings';
 
-// Overridable for deployment (set DVR_BIN in the service env / deskpass.env).
-// Falls back to the dev source location.
-const DVR_BIN = process.env.DVR_BIN || '/home/devel/deskpass_cam/bdvr_mux/bdvr_mux';
+// Path to the muxer binary. There is no sensible default: the previous
+// fallback pointed at one developer's home directory, so on every other host
+// recording failed with no indication why. Set DVR_BIN in the service
+// environment (see DEVELOPMENT.md) — without it DVR stays off and says so.
+const DVR_BIN = process.env.DVR_BIN || '';
 
 // perceptAdd registers each camera's raw stream url under cam:stream:<camId>;
 // there is no fixed :8554 MediaMTX endpoint anymore, so the stream url the DVR
 // records from must be resolved from redis.
-const redisGet = await createClient()
-  .on('error', (err) => console.log('[DVR] redis error', err))
-  .connect();
+// Connected in the background for the same reason as server/redisclient.ts:
+// an unreachable redis must not stop the server from starting.
+const redisGet = createClient({ url: process.env.REDIS_URL || undefined })
+  .on('error', (err) => console.error('[DVR] redis error', err?.message ?? err));
+void (async () => {
+  for (let attempt = 1; ; attempt++) {
+    try { await redisGet.connect(); return; }
+    catch (err: any) {
+      const wait = Math.min(1000 * 2 ** Math.min(attempt, 5), 30000);
+      console.error(`[DVR] redis connection attempt ${attempt} failed (${err?.message ?? err}); retrying in ${wait / 1000}s`);
+      await new Promise((resolve) => setTimeout(resolve, wait));
+    }
+  }
+})();
 
 async function resolveAiUrl(camId: string, timeoutMs = 20_000): Promise<string | null> {
   const deadline = Date.now() + timeoutMs;
@@ -78,7 +91,7 @@ async function closeCurrentSegment(handle: DvrHandle) {
   const rec = await RecordingsCollection.findOneAsync({ _id: id });
   let sizeBytes: number | undefined;
   if (rec?.path) {
-    try { sizeBytes = statSync(rec.path).size; } catch {}
+    try { sizeBytes = statSync(rec.path).size; } catch { /* segment already rotated away */ }
   }
 
   await RecordingsCollection.updateAsync({ _id: id }, {
@@ -96,6 +109,14 @@ function _spawnHandle(
 ): void {
   const outDir = join(config.storagePath, camId);
   if (!ensureDir(outDir)) return;
+
+  if (!DVR_BIN) {
+    console.error(
+      `[DVR] DVR_BIN is not set, so "${cam.name}" (${camId}) will not be recorded. ` +
+      'Point DVR_BIN at the bdvr_mux binary to enable recording.',
+    );
+    return;
+  }
 
   console.log(`[DVR] Starting "${cam.name}" (${camId})${isFallback ? ' [fallback]' : ''}: ${url} → ${outDir}`);
 
@@ -153,7 +174,7 @@ function _spawnHandle(
           handle.consecutiveErrors = 0;
           if (!handle.started && !handle.stopping) {
             handle.started = true;
-            try { proc.stdin?.write('{"cmd":1}\n'); } catch {}
+            try { proc.stdin?.write('{"cmd":1}\n'); } catch { /* muxer already exited */ }
           }
         } else if (s === STATUS_CONNECTION_ERROR || s === STATUS_STREAM_ERROR) {
           // Only the primary AI handle triggers fallback logic
@@ -215,8 +236,8 @@ async function spawnForCam(
   const existing = _handles[camId];
   if (existing) {
     existing.stopping = true;
-    try { existing.proc.stdin?.write('{"cmd":3}\n'); } catch {}
-    setTimeout(() => { try { existing.proc.kill(); } catch {} }, 3000);
+    try { existing.proc.stdin?.write('{"cmd":3}\n'); } catch { /* muxer already exited */ }
+    setTimeout(() => { try { existing.proc.kill(); } catch { /* already dead */ } }, 3000);
   }
   stopFallbackForCam(camId);
 
@@ -244,8 +265,8 @@ function stopFallbackForCam(camId: string) {
   const h = _fallbackHandles[camId];
   if (!h) return;
   h.stopping = true;
-  try { h.proc.stdin?.write('{"cmd":3}\n'); } catch {}
-  setTimeout(() => { try { h.proc.kill(); } catch {} }, 3000);
+  try { h.proc.stdin?.write('{"cmd":3}\n'); } catch { /* muxer already exited */ }
+  setTimeout(() => { try { h.proc.kill(); } catch { /* already dead */ } }, 3000);
 }
 
 function stopForCam(camId: string) {
@@ -253,8 +274,8 @@ function stopForCam(camId: string) {
   const h = _handles[camId];
   if (!h) return;
   h.stopping = true;
-  try { h.proc.stdin?.write('{"cmd":3}\n'); } catch {}
-  setTimeout(() => { try { h.proc.kill(); } catch {} }, 3000);
+  try { h.proc.stdin?.write('{"cmd":3}\n'); } catch { /* muxer already exited */ }
+  setTimeout(() => { try { h.proc.kill(); } catch { /* already dead */ } }, 3000);
 }
 
 function stopAll() {

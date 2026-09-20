@@ -9,28 +9,15 @@ import TaskManagerApp from './taskManager';
 import ModelsManagementApp from './modelsManagement';
 import DvrApp from './dvr';
 import RoleBuilderApp from './RoleBuilder';
-import zoneMethods from './zones/serverMethods';
-import camMethods from './CamConfig/serverMethods';
-import liveStreamMethods from './livestream/serverMethods';
-import personMethods from './personsDatabase/serverMethods';
 import Operators from './Operators';
-import OperatorMethods from './Operators/serverMethods';
-import SettingsMethods from './Settings/serverMethods';
-import RoleBuilderMethods from './RoleBuilder/serverMethods';
 import Settings from './Settings'
 import ScenariosApp from './scenarios';
 import ScenarioArchiveApp from './scenarioArchive';
-import scenarioMethods from './scenarios/serverMethods';
-export const CommonMethods = {
-    ...zoneMethods,
-    ...camMethods,
-    ...liveStreamMethods,
-    ...personMethods,
-    ...OperatorMethods,
-    ...SettingsMethods,
-    ...RoleBuilderMethods,
-    ...scenarioMethods,
-}
+import EventArchiveApp from './eventArchive';
+
+// Server methods live in ./methods.ts — importing them here would ship them to
+// the browser along with this barrel.
+
 export default {
     Zones,
     CamConfig,
@@ -48,4 +35,5 @@ export default {
     RoleBuilderApp,
     ScenariosApp,
     ScenarioArchiveApp,
+    EventArchiveApp,
 };

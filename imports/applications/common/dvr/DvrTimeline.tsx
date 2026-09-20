@@ -3,10 +3,13 @@ import { Box, Typography } from '@mui/material';
 import { Cam } from '/imports/api/cams';
 import { Recording } from '/imports/api/recordings';
 
-export const CAM_COLORS = [
-  '#2196f3', '#4caf50', '#ff9800', '#e91e63',
-  '#9c27b0', '#00bcd4', '#8bc34a', '#ff5722',
-];
+// One colour per camera on the timeline. These identify rather than signal,
+// so they come from the theme's categorical set instead of the palette: the
+// same eight hues hold their separation on both the dark and the light
+// ground, and none of them can be mistaken for the red that means "alarm".
+import { SERIES } from '/imports/ui/theme';
+
+export const CAM_COLORS = [...SERIES];
 
 const ROW_HEIGHT  = 26;
 const AXIS_HEIGHT = 22;
@@ -40,6 +43,17 @@ export const DvrTimeline: React.FC<Props> = ({
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [dragging, setDragging]  = useState(false);
+
+  // A recording still being written has no end time and is drawn up to now.
+  // Nothing in the data changes while it grows, so the bar needs a tick of
+  // its own to keep extending; only while such a recording exists.
+  const ongoing = recordings.some((r) => !r.endedAt);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (!ongoing) return;
+    const id = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [ongoing]);
 
   const rangeMs = viewEnd - viewStart;
 
@@ -147,7 +161,7 @@ export const DvrTimeline: React.FC<Props> = ({
             }}>
               {camRecs.map(rec => {
                 const rStart = Math.max(rec.startedAt.getTime(), viewStart);
-                const rEnd   = Math.min((rec.endedAt?.getTime() ?? Date.now()), viewEnd);
+                const rEnd   = Math.min((rec.endedAt?.getTime() ?? nowMs), viewEnd);
                 if (rEnd <= rStart) return null;
                 const left  = pct(rStart);
                 const width = pct(rEnd) - left;

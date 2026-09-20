@@ -24,7 +24,7 @@ const APP_GROUPS: { label: string; apps: string[] }[] = [
     },
     {
         label: 'Person Alert',
-        apps: ['Person lists', 'Alerts Archive'],
+        apps: ['Person lists', 'Alerts Archive', 'Event Archive'],
     },
     {
         label: 'Analytics',

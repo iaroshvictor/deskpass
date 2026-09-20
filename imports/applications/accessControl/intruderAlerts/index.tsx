@@ -84,6 +84,9 @@ import IntruderItemModal from './intruderItemModal';
                  }}
            />
             <DateRangePicker
+                // keep the calendar inside the screen: these windows often sit near
+                // the right edge, where the default placement puts it out of view
+                preventOverflow
                 style={{width:'100%'}}
                 format="dd.MM.yy HH:mm:ss"
                 placeholder="Select date/time range"
@@ -180,5 +183,9 @@ const IntruderAlertsArchive: AppType = {
     appIcon: <Icon />,
     render: IntruderAlertsArchiveRenderer,
     module: 'accessControl',
+    // Superseded by Event Archive, which shows line crossings alongside
+    // person-list alerts and scenario firings. Kept whole and reachable in
+    // code: drop this flag to put the shortcut back.
+    hideShortcut: true,
 };
 export default IntruderAlertsArchive;

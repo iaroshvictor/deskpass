@@ -180,7 +180,9 @@ export const cleanupChat = async ({session, bot}:{session:TgSession, bot:Telegra
         try{
           bot.deleteMessage(session.chatId, messageId)
         }catch(e : any){
-
+          // Telegram refuses to delete messages older than 48 hours; that is
+          // expected during cleanup and must not abort the rest of the batch.
+          console.debug('[tg] could not delete message', messageId, e?.message);
         }
       })
     )

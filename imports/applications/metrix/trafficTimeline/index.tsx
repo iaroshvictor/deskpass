@@ -96,7 +96,7 @@ function TrafficTimelineRenderer() {
         datasets: [{
             label: 'Unique Visitors',
             data: timelineData.dataPoints.map(dp => dp.count),
-            borderColor: '#1976d2',
+            borderColor: 'primary.main',
             backgroundColor: chartType === 'line' ? 'rgba(25, 118, 210, 0.2)' : 'rgba(25, 118, 210, 0.7)',
             fill: chartType === 'line',
             tension: 0.3
@@ -131,6 +131,9 @@ function TrafficTimelineRenderer() {
                         )}
                     />
                     <DateRangePicker
+                        // keep the calendar inside the screen: these windows often sit near
+                        // the right edge, where the default placement puts it out of view
+                        preventOverflow
                         placeholder="Select date/time range"
                         format="dd.MM.yy HH:mm"
                         caretAs={CalendarMonthIcon}

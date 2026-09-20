@@ -1,11 +1,17 @@
 import { Meteor } from 'meteor/meteor';
 import { VisitsCollection, Visit } from '/imports/api/visits';
 import { VisitsSummaryCollection, VisitSummary } from '/imports/api/visitSummary';
+import { checkedFilter } from '/imports/security/checkedFilter';
+import { SUMMARY_FILTER } from '/imports/security/filterSpecs';
 type MeteorMethod = (this: Meteor.MethodThisType, ...args: any[]) => any
 
 const personMethods : {[x:string]:MeteorMethod} = {
     countVisits :async function(filter:{cam?:string, timestamp?:{ $gte?: Date, $lte?: Date }} = {}): Promise<number> {
-        return await VisitsSummaryCollection.find(filter).countAsync();
+        if (!this.userId) throw new Meteor.Error('not-authorized');
+        // Same whitelist as the publication behind this screen: the filter is
+        // a query document, so an operator smuggled into it would run on the
+        // database.
+        return await VisitsSummaryCollection.find(checkedFilter(filter, SUMMARY_FILTER)).countAsync();
     },
     removeVisit: async function(visitId: string): Promise<void> {
         if (!this.userId) {

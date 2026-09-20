@@ -154,7 +154,7 @@ function ModelsManagementRenderer(_props: AppProps) {
                         position:'fixed',
                         zIndex:5,
                         p:'6px',
-                        backgroundColor:'#ffffff87',
+                        backgroundColor:'rgba(from var(--mui-palette-background-paper) r g b / 0.53)',
                         right:'22px',
                         borderRadius:'4px'
                     }}
@@ -248,10 +248,10 @@ function ModelsManagementRenderer(_props: AppProps) {
                                     key={visit._id}
                                     sx={{
                                         cursor: 'pointer',
-                                        border: selectedItems.includes(visit._id || '') ? '3px solid #1976d2' : '3px solid transparent',
+                                        border: selectedItems.includes(visit._id || '') ? '3px solid var(--mui-palette-primary-main)' : '3px solid transparent',
                                         borderRadius: 1,
                                         overflow: 'hidden',
-                                        background: '#f0f0f0',
+                                        background: 'var(--mui-palette-surface-sunken)',
                                     }}
                                     onClick={() => toggleSelect(visit._id || '')}
                                 >

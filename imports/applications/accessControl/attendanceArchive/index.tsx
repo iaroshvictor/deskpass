@@ -86,6 +86,9 @@ const AttendanceArchiveRenderer = () => {
                  }}
            />
             <DateRangePicker
+                // keep the calendar inside the screen: these windows often sit near
+                // the right edge, where the default placement puts it out of view
+                preventOverflow
                 style={{width:'100%'}}
                 format="dd.MM.yy HH:mm:ss"
                 placeholder="Select date/time range"

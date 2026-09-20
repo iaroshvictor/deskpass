@@ -74,7 +74,7 @@ const ZoneItem = ({zone, Cams, Zones, launchApp}:ZoneItemProps)=>{
     return(
         <>
         <Accordion sx={{boxShadow: '0px 5px 5px -3px rgba(0, 0, 0, 0.2), 0px 8px 10px 1px rgba(0, 0, 0, 0.14), 0px 3px 14px 2px rgba(0, 0, 0, 0.12)', mb: 1}} key={zone._id}>
-            <AccordionSummary   expandIcon={<ExpandMoreIcon />} sx={{backgroundColor:'#f5f5f5'}}>
+            <AccordionSummary   expandIcon={<ExpandMoreIcon />} sx={{ backgroundColor: 'surface.sunken' }}>
                 {`${zone.name} (${Cams.filter(cam => cam.zone === zone._id).length})`} 
             </AccordionSummary>
             <AccordionDetails sx={{pr:0}}>

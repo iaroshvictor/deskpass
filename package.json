@@ -5,7 +5,16 @@
     "start": "meteor run",
     "test": "meteor test --once --driver-package meteortesting:mocha",
     "test-app": "TEST_WATCH=1 meteor test --full-app --driver-package meteortesting:mocha",
-    "visualize": "meteor --production --extra-packages bundle-visualizer"
+    "visualize": "meteor --production --extra-packages bundle-visualizer",
+    "test:unit": "node --experimental-strip-types --no-warnings --test \"tests/unit/*.test.mjs\"",
+    "test:static": "node --test \"tests/static/*.test.mjs\"",
+    "test:security": "node --test-concurrency=1 --test \"tests/security/*.test.mjs\"",
+    "test:forms": "node --test-concurrency=1 --test \"tests/forms/*.test.mjs\"",
+    "test:audit": "npm run test:unit && npm run test:static && npm run test:security && npm run test:forms",
+    "test:e2e": "playwright test tests/e2e",
+    "seed:dev": "node scripts/seed-dev-data.mjs",
+    "seed:clean": "node scripts/seed-dev-data.mjs --clean",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@babel/runtime": "^7.23.5",
@@ -46,6 +55,7 @@
   },
   "devDependencies": {
     "@meteorjs/rspack": "^1.0.0",
+    "@playwright/test": "^1.63.0",
     "@rsdoctor/rspack-plugin": "^1.2.3",
     "@rspack/cli": "^1.7.1",
     "@rspack/core": "^1.7.1",

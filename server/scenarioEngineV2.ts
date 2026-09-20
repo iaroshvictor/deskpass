@@ -332,7 +332,9 @@ export async function initScenarioEngineV2() {
       const msg = JSON.parse(message);
       if (msg.type === 'status') onStatus(msg).catch(console.error);
       else if (msg.type === 'crossing') onCrossing(msg).catch(console.error);
-    } catch { /* malformed */ }
+    } catch {
+      // As in v1: drop the bad payload, keep the engine running.
+    }
   });
   await sub.subscribe('new_detection', (message: string) => {
     try { onDetection(JSON.parse(message)).catch(console.error); } catch { /* malformed */ }

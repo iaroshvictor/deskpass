@@ -23,6 +23,7 @@ import CloudIcon from '@mui/icons-material/Cloud';
 import CloudOffIcon from '@mui/icons-material/CloudOff';
 import SyncIcon from '@mui/icons-material/Sync';
 import ErrorIcon from '@mui/icons-material/Error';
+import ThemeToggle from '../components/ThemeToggle';
 const DesktopBox = styled(Box)(({ theme }) => ({
     display:'flex',
     flexDirection:'column',
@@ -36,10 +37,12 @@ const DesktopBox = styled(Box)(({ theme }) => ({
   }),
 }));
 const DesktopShortcut = styled(Box)(({ theme }) => ({
-    '--black-0':'#29343F',
+    // The shadow colour follows the surface so labels stay readable on both
+    // the light and the dark wallpaper.
+    '--black-0': (theme.vars ?? theme).palette.surface.sunken,
     '--scale':'1rem',
     '--border-radius-1':'.375rem',
-    '--svg-drop-shadow-color':'#29343F',
+    '--svg-drop-shadow-color': (theme.vars ?? theme).palette.surface.sunken,
     '--svg-drop-shadow-0':'drop-shadow(.1rem .1rem .2rem color-mix(in srgb, var(--svg-drop-shadow-color) 50%, transparent))',
     gap:0.25,
     display:'flex',
@@ -54,7 +57,7 @@ const DesktopShortcut = styled(Box)(({ theme }) => ({
     borderRadius: 'var(--border-radius-1)',
     outline: 'none',
     cursor: 'pointer',
-    color:'#E5F2FF',
+    color: (theme.vars ?? theme).palette.text.primary,
     transition: 'background-color var(--transition-duration-0) var(--ease-in-out-default)',
     textShadow:'.1rem .1rem .2rem color-mix(in srgb,var(--black-0) 75%,transparent)',
     svg:{
@@ -77,6 +80,7 @@ const OsBox = styled(Box)(({ theme }) => ({
     boxSizing:'border-box',
     backgroundImage:'url(desktop.png)',
     backgroundSize:'cover',
+    backgroundColor: (theme.vars ?? theme).palette.background.default,
   ...theme.applyStyles('dark', {
     
   }),
@@ -89,7 +93,11 @@ const AppBar = styled(Box)(({ theme }) => ({
     boxSizing:'border-box',
     bottom:0,
     left:0,
-    background:'rgba(75, 75, 75, 0.5)',
+    zIndex: 1100,
+    // Was a fixed translucent grey, which sat wrong on a light desktop.
+    background: (theme.vars ?? theme).palette.background.paper,
+    borderTop: `1px solid ${(theme.vars ?? theme).palette.divider}`,
+    backdropFilter: 'blur(8px)',
   ...theme.applyStyles('dark', {
     
   }),
@@ -126,7 +134,7 @@ type personBoxProps = {
 const PersonAlertBox = ({alertItem, cam, alertList, personMeta, setItemModal}:personBoxProps)=>{
 
     return (
-        <Box  sx={{backgroundColor: 'rgba(0, 0, 0, 0.7)', borderRadius: 2, p: 1, mb: 1, position:'relative' }} key={alertItem._id}>
+        <Box  sx={{backgroundColor: 'rgba(from var(--mui-palette-background-paper) r g b / 0.82)', borderRadius: 2, p: 1, mb: 1, position:'relative' }} key={alertItem._id}>
         <Fab size="small" color="secondary" aria-label="add" sx={{ position: 'absolute', top: -5, right: -5 }}
             onClick={()=>{
                 Meteor.callAsync('setSeenAlert', alertItem._id) 
@@ -160,6 +168,23 @@ import Fab from '@mui/material/Fab';
 import {CamsCollection} from '/imports/api/cams';
 import IntruderItemModal from '../../applications/accessControl/intruderAlerts/intruderItemModal';
 import AlertItemModal from '../../applications/personAlert/alertsArchive/itemModal'
+/**
+ * The taskbar clock.
+ *
+ * Its own component with its own state on purpose: the tick used to live in
+ * Desktop, which renders every open application window, so the second hand
+ * re-rendered the whole desktop once a second. Measured on the event archive,
+ * that was about 250ms of work per tick with nothing on screen changing.
+ */
+const Clock = ({ format: pattern }: { format: string }) => {
+    const [now, setNow] = useState(new Date());
+    useEffect(() => {
+        const interval = setInterval(() => setNow(new Date()), 1000);
+        return () => clearInterval(interval);
+    }, []);
+    return <>{format(now, pattern)}</>;
+};
+
 export default function Desktop() {
     useSubscribe('unseenIntruders');
     useSubscribe('cams');
@@ -241,16 +266,7 @@ export default function Desktop() {
     const startListRef = React.useRef<HTMLDivElement>(null);
     const { width, height} = windowDimensions()
     const [lastActive, setLastActive] =useState<number | null>(null)
-    const [time, setTime] = useState(new Date());
-    
-    
-    useEffect(() => {
-        const interval = setInterval(() => {
-            setTime(new Date());
-        }, 1000);
 
-        return () => clearInterval(interval);
-    }, []);
     const toMinimize = (appId:number)=>{
         setTaskManager(prev => {
             const next = prev.map(t => t.appId === appId ? { ...t, minimized: !t.minimized } : t);
@@ -367,15 +383,21 @@ export default function Desktop() {
             )}
             {(UnseenPersonAlerts.length>0 || UnseenIntruders.length>0 || UnseenScenarioEvents.length>0) &&(
 
-                <Box sx={{ position: 'absolute', top: 10, right: 10, width: showAlerts ? '280px' : 'auto', zIndex: 1000 }}>
+                <Box sx={{
+                    position: 'absolute', top: 10, right: 10,
+                    width: showAlerts ? '280px' : 'auto', zIndex: 1000,
+                    // stop above the taskbar (52px) and scroll instead of
+                    // spilling off the screen
+                    maxHeight: 'calc(100vh - 72px)', overflowY: 'auto', overflowX: 'hidden',
+                }}>
                     <Stack direction="row" spacing={1} sx={{ mb: 1 }}>
                         <IconButton
                             size="small"
                             onClick={() => setShowAlerts(!showAlerts)}
                             sx={{
-                                backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                                backgroundColor: 'rgba(from var(--mui-palette-background-paper) r g b / 0.82)',
                                 color: 'warning.main',
-                                '&:hover': { backgroundColor: 'rgba(0, 0, 0, 0.85)' }
+                                '&:hover': { backgroundColor: 'rgba(from var(--mui-palette-background-paper) r g b / 0.96)' }
                             }}
                         >
                             {showAlerts ? <VisibilityOffIcon fontSize="small" /> : <VisibilityIcon fontSize="small" />}
@@ -395,15 +417,15 @@ export default function Desktop() {
                     {showAlerts && (
                         <>
                             {UnseenScenarioEvents.map((ev) => (
-                                <Box key={ev._id} sx={{ backgroundColor: 'rgba(0,0,0,0.78)', borderLeft: 4,
+                                <Box key={ev._id} sx={{ backgroundColor: 'rgba(from var(--mui-palette-background-paper) r g b / 0.9)', borderLeft: 4,
                                     borderColor: `${ev.severity === 'critical' ? 'error' : ev.severity === 'info' ? 'info' : 'warning'}.main`,
                                     borderRadius: 2, p: 1, mb: 1, position: 'relative' }}>
                                     <Fab size="small" color="secondary" sx={{ position: 'absolute', top: -5, right: -5 }}
                                         onClick={() => Meteor.callAsync('markScenarioEventsV2Seen', [ev._id])}>
                                         <DisabledVisibleIcon />
                                     </Fab>
-                                    <Typography variant="body2" sx={{ color: '#fff', pr: 3 }}>{ev.message}</Typography>
-                                    <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.6)' }}>
+                                    <Typography variant="body2" sx={{ color: 'text.primary', pr: 3 }}>{ev.message}</Typography>
+                                    <Typography variant="caption" sx={{ color: 'text.secondary' }}>
                                         {Cams.find(c => c._id === ev.camId)?.name || ev.camId} · {new Date(ev.triggeredAt).toLocaleTimeString()}
                                     </Typography>
                                 </Box>
@@ -421,7 +443,7 @@ export default function Desktop() {
 
                             }
                             {UnseenIntruders.map((intruder, index) => (
-                                <Box sx={{backgroundColor: 'rgba(0, 0, 0, 0.7)', borderRadius: 2, p: 1, mb: 1, position:'relative' }} key={intruder._id || index}>
+                                <Box sx={{backgroundColor: 'rgba(from var(--mui-palette-background-paper) r g b / 0.82)', borderRadius: 2, p: 1, mb: 1, position:'relative' }} key={intruder._id || index}>
                                     <Fab size="small" color="secondary" aria-label="add" sx={{ position: 'absolute', top: -5, right: -5 }}
                                         onClick={()=>{
                                             Meteor.callAsync('setSeenIntruder', intruder._id)
@@ -450,7 +472,7 @@ export default function Desktop() {
                 </Box>
             )}
             {loading() && (
-                <Box sx={{ display: 'flex', position:'absolute', width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center', zIndex:9999, backgroundColor:'rgba(0, 0, 0, 0.8)' }}>
+                <Box sx={{ display: 'flex', position:'absolute', width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center', zIndex:9999, backgroundColor:'rgba(0, 0, 0, 0.55)' }}>
                     <CircularProgress />
                     </Box>
             )}
@@ -498,14 +520,14 @@ export default function Desktop() {
             ))}
         </DesktopBox>
     <AppBar>
-        <Stack direction='row' spacing={2}>
+        <Stack direction='row' spacing={{ xs: 1, sm: 2 }} alignItems='center' sx={{ width: '100%', minWidth: 0 }}>
             <Button
-                sx={{width:'48px', background:'#1a237e'}}
+                sx={{ width: '48px', flexShrink: 0, background: 'primary.main', '&:hover': { background: 'primary.dark' } }}
                 onClick={(e)=>{
                     setStartAnchorEl(e.currentTarget);
                 }}
             >
-                <SitemarkIcon width={32} height={32} color='#ffffff' />
+                <SitemarkIcon width={32} height={32} color='currentColor' />
             </Button>
             <Popover
                 open={Boolean(startAnchorEl)}
@@ -540,9 +562,10 @@ export default function Desktop() {
                             display: 'flex',
                             flexDirection: 'column',
                             overflow: 'hidden',
-                            background: 'rgba(16,16,20,0.92)',
+                            background: 'rgba(from var(--mui-palette-background-paper) r g b / 0.94)',
                             backdropFilter: 'blur(14px)',
-                            border: '1px solid rgba(255,255,255,0.12)',
+                            border: '1px solid',
+                            borderColor: 'divider',
                             borderRadius: 2,
                             boxShadow: '0 16px 48px rgba(0,0,0,.65)',
                             p: 0,
@@ -554,7 +577,7 @@ export default function Desktop() {
                     <Typography variant='caption' sx={{ color:'rgba(255,255,255,0.5)', textTransform:'uppercase', letterSpacing:1 }}>Account</Typography>
                     <Stack direction='row' alignItems='center' justifyContent='space-between' sx={{ mt:0.5 }}>
                         <Stack direction='row' alignItems='center' spacing={1}>
-                            <Avatar sx={{ width:28, height:28, bgcolor:'#1a237e', fontSize:13 }}>
+                            <Avatar sx={{ width:28, height:28, bgcolor:'primary.main', color:'primary.contrastText', fontSize:13 }}>
                                 {(Meteor.user()?.username?.[0] ?? '?').toUpperCase()}
                             </Avatar>
                             <Typography sx={{ color:'#fff', fontWeight:500 }}>{Meteor.user()?.username ?? ''}</Typography>
@@ -569,7 +592,7 @@ export default function Desktop() {
                         </Button>
                     </Stack>
                 </Box>
-                <Divider sx={{ borderColor:'rgba(255,255,255,0.12)' }}/>
+                <Divider sx={{ borderColor: 'divider' }}/>
                 {/* the only scrolling region — flex:1 + minHeight:0 lets it shrink
                     inside the vh-capped paper so the search stays pinned below */}
                 <Box ref={startListRef} sx={{
@@ -607,7 +630,7 @@ export default function Desktop() {
                         ))}
                     </MenuList>
                 </Box>
-                <Divider sx={{ borderColor:'rgba(255,255,255,0.12)' }}/>
+                <Divider sx={{ borderColor: 'divider' }}/>
                 {/* pinned below the scroll area — always reachable, never clipped */}
                 <Box sx={{ flexShrink:0, p:1.25 }}>
                     <TextField
@@ -622,7 +645,8 @@ export default function Desktop() {
                         sx={{
                             px:1.25, py:0.5,
                             background:'rgba(255,255,255,0.07)',
-                            border:'1px solid rgba(255,255,255,0.12)',
+                            border: '1px solid',
+                            borderColor: 'divider',
                             borderRadius:1.5,
                             input:{ color:'#fff', fontSize:14, padding:0 },
                             '& input::placeholder':{ color:'rgba(255,255,255,0.45)', opacity:1 },
@@ -631,8 +655,16 @@ export default function Desktop() {
                     />
                 </Box>
             </Popover>
-            <Divider orientation="vertical" flexItem />
-            <Stack sx={{width:'100%'}} direction='row' spacing={2}>
+            <Divider orientation="vertical" flexItem sx={{ flexShrink: 0 }} />
+            <Stack
+                direction='row'
+                spacing={{ xs: 1, sm: 2 }}
+                sx={{
+                    flex: 1, minWidth: 0, overflowX: 'auto', overflowY: 'hidden',
+                    // a scrollbar inside a 52px bar would eat the buttons
+                    scrollbarWidth: 'none', '&::-webkit-scrollbar': { display: 'none' },
+                }}
+            >
                 {taskManager.map(task=>(
                     <Button key={task.appId} onClick={()=>{
                             if(lastActive === task.appId){
@@ -644,21 +676,30 @@ export default function Desktop() {
                                 bringToTop(task.appId)
                             }
                         }
-                        } sx={{width:'48px', background:task.minimized?'rgba(255, 255, 255, 0.1)' : lastActive === task.appId ? 'rgba(255, 255, 255, 0.8)' : 'rgba(255, 255, 255, 0.2)',borderBottom:'1px solid white'}}>
+                        } sx={{
+                            width: '48px', minWidth: '48px', flexShrink: 0,
+                            backgroundColor: task.minimized ? 'action.hover'
+                                : lastActive === task.appId ? 'action.selected'
+                                : 'action.disabledBackground',
+                            // the active window is marked by the underline, which
+                            // reads on either scheme
+                            borderBottom: '2px solid',
+                            borderBottomColor: lastActive === task.appId ? 'primary.main' : 'transparent',
+                        }}>
                         {task.appIcon}
                     </Button>
                 ))}
                
             </Stack>
-            <Divider orientation="vertical" flexItem />
+            <Divider orientation="vertical" flexItem sx={{ flexShrink: 0 }} />
             <Tooltip title={apolloStatus?.message || 'Apollo API Status'}>
                 <Chip
                     size="small"
                     icon={
-                        apolloStatus?.status === 'connected' ? <CloudIcon sx={{ color: '#fff !important' }} /> :
-                        apolloStatus?.status === 'connecting' ? <SyncIcon sx={{ color: '#fff !important', animation: 'spin 1s linear infinite' }} /> :
-                        apolloStatus?.status === 'auth_error' ? <ErrorIcon sx={{ color: '#fff !important' }} /> :
-                        <CloudOffIcon sx={{ color: '#fff !important' }} />
+                        apolloStatus?.status === 'connected' ? <CloudIcon sx={{ color: 'text.primary' }} /> :
+                        apolloStatus?.status === 'connecting' ? <SyncIcon sx={{ color: 'text.primary', animation: 'spin 1s linear infinite' }} /> :
+                        apolloStatus?.status === 'auth_error' ? <ErrorIcon sx={{ color: 'text.primary' }} /> :
+                        <CloudOffIcon sx={{ color: 'text.primary' }} />
                     }
                     label={
                         apolloStatus?.status === 'connected' ? 'Apollo online' :
@@ -669,13 +710,15 @@ export default function Desktop() {
                     }
                     sx={{
                         mx: 1,
+                        flexShrink: 0,
+                        '& .MuiChip-label': { display: { xs: 'none', sm: 'block' } },
                         backgroundColor:
-                            apolloStatus?.status === 'connected' ? '#4caf50' :
-                            apolloStatus?.status === 'connecting' ? '#ff9800' :
-                            apolloStatus?.status === 'auth_error' ? '#f44336' :
-                            '#757575',
-                        color: 'white',
-                        '& .MuiChip-icon': { color: 'white' },
+                            apolloStatus?.status === 'connected' ? 'success.main' :
+                            apolloStatus?.status === 'connecting' ? 'warning.main' :
+                            apolloStatus?.status === 'auth_error' ? 'error.main' :
+                            'text.secondary',
+                        color: 'background.default',
+                        '& .MuiChip-icon': { color: 'background.default', mx: { xs: 0.5, sm: undefined } },
                         '@keyframes spin': {
                             '0%': { transform: 'rotate(0deg)' },
                             '100%': { transform: 'rotate(360deg)' }
@@ -683,13 +726,19 @@ export default function Desktop() {
                     }}
                 />
             </Tooltip>
-            <Divider orientation="vertical" flexItem />
-            <Box sx={{pr:2, textAlign:'center'}}>
-                <Typography color='white' variant='subtitle2'>
-                    {format(time, 'HH:mm:ss')}
+            <Divider orientation="vertical" flexItem sx={{ flexShrink: 0 }} />
+            <Box sx={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>
+                <ThemeToggle />
+            </Box>
+            <Divider orientation="vertical" flexItem sx={{ flexShrink: 0 }} />
+            <Box sx={{ pr: { xs: 0.5, sm: 2 }, textAlign: 'center', flexShrink: 0 }}>
+                <Typography color='text.primary' variant='subtitle2' noWrap>
+                    <Clock format='HH:mm:ss' />
                 </Typography>
-                <Typography color='white' variant='subtitle2'>
-                     {format(time, 'dd MMMM')}
+                {/* the date is the first thing to go when the bar runs out of room */}
+                <Typography color='text.primary' variant='subtitle2' noWrap
+                    sx={{ display: { xs: 'none', sm: 'block' } }}>
+                     <Clock format='dd MMMM' />
                 </Typography>
             </Box>
         </Stack>

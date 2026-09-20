@@ -100,7 +100,7 @@ const NewCamAppRender = () => {
                                 <Box
                                     sx={{
                                     minWidth: '25%',
-                                    backgroundColor:'#455a64',
+                                    backgroundColor:'surface.sunken',
                                     display: 'flex',
                                     alignItems: 'center',
                                     justifyContent: 'center',

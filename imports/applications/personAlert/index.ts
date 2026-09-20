@@ -1,11 +1,7 @@
 import PersonLists from "./personLists";
 import AlertsArchive from "./alertsArchive";
-import personListsMethods from "./personLists/serverMethods"; 
-import alertsArchiveMethods from './alertsArchive/serverMethods'
 
-export const PersonAlertmethods ={
-    ...personListsMethods,
-    ...alertsArchiveMethods
+// Server methods live in ./methods.ts — importing them here would ship them to
+// the browser along with this barrel.
 
-}
 export default {PersonLists, AlertsArchive }

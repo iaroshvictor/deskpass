@@ -1,11 +1,18 @@
 import { Meteor } from 'meteor/meteor';
 import { Accounts } from "meteor/accounts-base";
+import { clampLimit, clampSkip, sanitizeFilter, sanitizeSort } from '/imports/security/queryGuards';
+import {
+  VISIT_FILTER, INTRUDER_FILTER, ALERTS_FILTER, ACCESS_REPORT_FILTER,
+  CAPTION_FILTER, SCENARIO_EVENT_FILTER, TEMPORARY_CARD_FILTER, SUMMARY_FILTER,
+} from '/imports/security/filterSpecs';
+import { requireUser, requirePermission, isAdmin } from '/imports/security/guards';
+import { PERMISSIONS } from '/imports/security/accessPolicy';
 import { RolesCollection, RoleDefinitionsCollection } from '../imports/api/roles';
 import { ZonesCollection } from '../imports/api/zones';
 import { DivisionsCollection } from '../imports/api/divisions';
 import { ControllersCollection } from '/imports/api/controllers';
-import { CommonMethods } from '/imports/applications/common';
-import { PersonAlertmethods } from '/imports/applications/personAlert';
+import { CommonMethods } from '/imports/applications/common/methods';
+import { PersonAlertmethods } from '/imports/applications/personAlert/methods';
 import { startProbe, stopDiscovery } from 'node-onvif-ts';
 import { OnvifDevice } from '/imports/api/onvifClient';
 import { Cam, CamsCollection } from '/imports/api/cams';
@@ -14,8 +21,8 @@ import { CamZoneDefsCollection } from '/imports/api/camZoneDefs';
 import { VisitsCollection, Visit } from '/imports/api/visits';
 import { VisitSummary, VisitsSummaryCollection } from '/imports/api/visitSummary';
 import resizeBase64Image from './utils'
-import { AccessControllMethods } from '/imports/applications/accessControl';
-import { MetrixMethods } from '/imports/applications/metrix';
+import { AccessControllMethods } from '/imports/applications/accessControl/methods';
+import { MetrixMethods } from '/imports/applications/metrix/methods';
 import { WorkspacesCollection, App } from '/imports/api/workspace';
 import { GatesCollection, Gate } from '/imports/api/gates';
 import { AlertLists } from '/imports/api/alertLists';
@@ -148,7 +155,7 @@ Meteor.startup(async () => {
             if(localPerson && cardHolder){
               if(localPerson.idInfo){
                 const accessCards = cardIssues.Records.map((card: any) => `${card.CardId}`) || [];
-                VisitsSummaryCollection.updateAsync(localPerson._id, {
+                await VisitsSummaryCollection.updateAsync(localPerson._id, {
                   $set:{
                     idInfo:{
                       ...localPerson.idInfo,
@@ -199,7 +206,7 @@ Meteor.startup(async () => {
             if(localPerson.idInfo && cardIssue.Owner){
               const cardIssues = await ApolloApi.getData(`/cardissue?filter={Expressions:[{Property:"Owner.Id",Operation:"Eq", Value:${cardIssue.Owner.Id}}]}`)
               const accessCards = cardIssues.Records.map((card: any) => `${card.CardId}`) || [];
-              VisitsSummaryCollection.updateAsync(localPerson._id, {
+              await VisitsSummaryCollection.updateAsync(localPerson._id, {
                 $set:{
                   idInfo:{
                     ...localPerson.idInfo,
@@ -496,7 +503,7 @@ Meteor.startup(async () => {
                 const acD = { ...visit, type: myif.action, idInfo: person._id, source: gate._id } as AccessReport;
                 if (!LiveGateReports[visit.tracking_id]) {
                   LiveGateReports[visit.tracking_id] = { handler: Meteor.setTimeout(() => { delete LiveGateReports[visit.tracking_id]; }, 10_000) };
-                  AccessReportCollection.insertAsync(acD);
+                  await AccessReportCollection.insertAsync(acD);
                 }
               }
             });
@@ -544,7 +551,9 @@ Meteor.startup(async () => {
       ASPHandler[id].on('close', ()=>{
         startAspHandler(id, ip);
       })
-    } catch (error) {}
+    } catch (error) {
+      console.error(`[ASP] handler for controller ${id} (${ip}) failed to start:`, error);
+    }
   }
   // All cameras run on the unified C++ perception engine (deskpass_percept).
   CamsCollection.find({}).observeChanges({
@@ -659,7 +668,7 @@ Meteor.startup(async () => {
   RecordingsCollection.rawCollection().createIndex({ camId: 1, startedAt: -1 });
   RecordingsCollection.rawCollection().createIndex({ startedAt: -1 });
 VisitsSummaryCollection.rawCollection().createIndex({ 'source': 1, 'timestamp': -1 });
-  VisitsSummaryCollection.rawCollection().createIndex({ timestap: 1 });
+  VisitsSummaryCollection.rawCollection().createIndex({ timestamp: 1 });
   VisitsSummaryCollection.rawCollection().createIndex({ idInfo: 1 }, {sparse: true});
   VisitsSummaryCollection.rawCollection().createIndex({ 'idInfo.divission': 1 });
   VisitsSummaryCollection.rawCollection().createIndex({ 'par.$**': 1 });
@@ -866,13 +875,23 @@ VisitsSummaryCollection.rawCollection().createIndex({ 'source': 1, 'timestamp': 
     );
     await RolesCollection.insertAsync({role:'admin', userId:firstacc})
   }
-  const devices = await startProbe();
-  localOnvif = devices.map(d=>d as OnvifDevice)
+  // ONVIF discovery is no longer awaited here. It took seconds, and the
+  // publications and methods below are only registered once this callback
+  // reaches them — until then a connected client is told its perfectly valid
+  // method does not exist. Discovery now runs only while someone is watching
+  // the camera picker (see the onvifDevices publication).
+
+  // Page sizes the server enforces regardless of what the client asks for.
+  // `visits` keeps a high ceiling because the models screen legitimately pulls
+  // every reference visit in one subscription.
+  const PAGE = { fallback: 100, max: 500 };
+  const VISITS_PAGE = { fallback: 100, max: 100000 };
+
   Meteor.publish('allUsers', function(){
-    //toDo: add roles check
-    if(this.userId){
-      return Meteor.users.find({})
-    }
+    if (!this.userId) return this.ready();
+    // Field list on purpose: publishing users unrestricted ships the password
+    // service block — bcrypt hashes included — to every signed-in client.
+    return Meteor.users.find({}, { fields: { username: 1, createdAt: 1, profile: 1 } });
   })
   Meteor.publish('workspace', function(){
     if(this.userId){
@@ -880,136 +899,306 @@ VisitsSummaryCollection.rawCollection().createIndex({ 'source': 1, 'timestamp': 
     }
     return [];
   })
-  Meteor.setInterval(async()=>{
-    try{
+  // ONVIF discovery broadcasts on the local network. It used to run every ten
+  // seconds for the lifetime of the server, whether or not anyone was looking
+  // at the camera picker; now it runs only while that picker is open.
+  const ONVIF_PROBE_MS = Number(process.env.ONVIF_PROBE_MS || 15000);
+  // Do not tear discovery down the instant the last viewer leaves: opening a
+  // second screen, or a page reload, would otherwise thrash the UDP sockets
+  // the library binds for each probe.
+  const ONVIF_LINGER_MS = Number(process.env.ONVIF_LINGER_MS || 60000);
+
+  let onvifSubscribers = 0;
+  let onvifTimer: number | undefined;
+  let onvifStopTimer: number | undefined;
+  let onvifProbeInFlight = false;
+
+  async function probeOnvifOnce() {
+    // startProbe binds sockets; running two at once, or starting a new one
+    // before the previous finished, is asking for trouble.
+    if (onvifProbeInFlight) return;
+    onvifProbeInFlight = true;
+    try {
       const devices = await startProbe();
-      localOnvif = devices.map(d=>d as OnvifDevice)
-      await stopDiscovery()
-    }catch(e){}
-    
-  }, 10000)
-  Meteor.publish('onvifDevices', function(){
-    localOnvif.forEach(d=> this.added('onvifdevices', d.urn, {...d}))
-    this.ready()
+      localOnvif = devices.map((d) => d as OnvifDevice);
+    } catch (e) {
+      // A camera that is briefly unreachable is normal; a persistent failure
+      // should still be visible.
+      console.error('[ONVIF] discovery probe failed:', e instanceof Error ? e.message : e);
+    } finally {
+      // Always release the discovery sockets, including after a failure.
+      try { await stopDiscovery(); } catch { /* discovery was not running */ }
+      onvifProbeInFlight = false;
+    }
+  }
+
+  function startOnvifDiscovery() {
+    if (onvifStopTimer !== undefined) {
+      Meteor.clearTimeout(onvifStopTimer);
+      onvifStopTimer = undefined;
+    }
+    if (onvifTimer !== undefined) return;
+    void probeOnvifOnce();
+    onvifTimer = Meteor.setInterval(() => void probeOnvifOnce(), ONVIF_PROBE_MS);
+  }
+
+  function stopOnvifDiscovery() {
+    if (onvifTimer === undefined || onvifStopTimer !== undefined) return;
+    onvifStopTimer = Meteor.setTimeout(() => {
+      onvifStopTimer = undefined;
+      if (onvifSubscribers > 0) return;   // someone came back while we waited
+      if (onvifTimer !== undefined) {
+        Meteor.clearInterval(onvifTimer);
+        onvifTimer = undefined;
+      }
+    }, ONVIF_LINGER_MS);
+  }
+
+  Meteor.publish('onvifDevices', function () {
+    if (!this.userId) return this.ready();
+    const self: any = this;
+
+    onvifSubscribers += 1;
+    startOnvifDiscovery();
+
+    // Devices found before this subscription started, then anything discovery
+    // turns up afterwards. The old version pushed a one-off snapshot, so a
+    // camera found a second later never appeared until the screen reopened.
+    const sent = new Set<string>();
+    const flush = () => {
+      for (const d of localOnvif) {
+        if (sent.has(d.urn)) continue;
+        sent.add(d.urn);
+        self.added('onvifdevices', d.urn, { ...d });
+      }
+    };
+    flush();
+    self.ready();
+
+    const pushTimer = Meteor.setInterval(flush, 2000);
+    self.onStop(() => {
+      Meteor.clearInterval(pushTimer);
+      onvifSubscribers -= 1;
+      if (onvifSubscribers <= 0) {
+        onvifSubscribers = 0;
+        stopOnvifDiscovery();
+      }
+    });
   })
   Meteor.publish("zones", function () {
+    if (!this.userId) return this.ready();
     return ZonesCollection.find()
   });
   Meteor.publish("divisions", function () {
+    if (!this.userId) return this.ready();
     return DivisionsCollection.find()
   });
   Meteor.publish("cams", function () {
+    if (!this.userId) return this.ready();
     return CamsCollection.find()
   });
   Meteor.publish("cam_line_defs", function () {
+    if (!this.userId) return this.ready();
     return CamLineDefsCollection.find();
   });
   Meteor.publish("cam_zone_defs", function () {
+    if (!this.userId) return this.ready();
     return CamZoneDefsCollection.find();
   });
   Meteor.publish("cam_events", function (source?: string, limit: number = 50) {
+    if (!this.userId) return this.ready();
     return CamEventsCollection.find(
       source ? { source } : {},
       { sort: { timestamp: -1 }, limit });
   });
   Meteor.publish("cam_live_status", function () {
+    if (!this.userId) return this.ready();
     return CamLiveStatusCollection.find();
   });
 
-  // Per-frame overlay data for the annotated livestream. Polls the redis
-  // cam:frames:<id> tail at ~10fps and pushes LIGHT metadata (boxes, faces,
-  // landmarks, pose, colors, face thumbnails) to the client as a single
-  // reactive doc — no Mongo, heavy fields (embeddings, person crops) stripped.
+  /**
+   * One redis poller per camera, shared by everyone watching it.
+   *
+   * Each subscription used to start its own interval, so two operators on the
+   * same camera meant twice the redis traffic — and the overlay feed polls ten
+   * times a second. Now the first subscriber starts the poller, the rest
+   * attach to it, and the last one to leave stops it. A late joiner gets the
+   * most recent payload immediately instead of an empty document.
+   */
+  function sharedCameraFeed(
+    collection: string,
+    intervalMs: number,
+    initial: Record<string, unknown>,
+    read: (camId: string, state: { last: any }) => Promise<Record<string, unknown> | null>,
+  ) {
+    interface Room {
+      subscribers: Set<any>;
+      timer: number;
+      latest: Record<string, unknown>;
+      state: { last: any };
+    }
+    const rooms = new Map<string, Room>();
+
+    return function join(camId: string, sub: any) {
+      let room = rooms.get(camId);
+      if (!room) {
+        const fresh: Room = {
+          subscribers: new Set(), timer: 0, latest: { ...initial }, state: { last: null },
+        };
+        fresh.timer = Meteor.setInterval(async () => {
+          let update: Record<string, unknown> | null = null;
+          try {
+            update = await read(camId, fresh.state);
+          } catch {
+            // Polled up to ten times a second: a malformed or missing redis
+            // frame is normal and self-corrects on the next tick, and logging
+            // it would flood the console.
+          }
+          if (!update) return;
+          fresh.latest = { ...fresh.latest, ...update };
+          for (const s of fresh.subscribers) s.changed(collection, camId, update);
+        }, intervalMs);
+        rooms.set(camId, fresh);
+        room = fresh;
+      }
+
+      room.subscribers.add(sub);
+      sub.added(collection, camId, room.latest);
+      sub.ready();
+
+      sub.onStop(() => {
+        const current = rooms.get(camId);
+        if (!current) return;
+        current.subscribers.delete(sub);
+        if (current.subscribers.size === 0) {
+          Meteor.clearInterval(current.timer);
+          rooms.delete(camId);
+        }
+      });
+    };
+  }
+
+  // Per-frame overlay data for the annotated livestream: LIGHT metadata
+  // (boxes, faces, landmarks, pose, colors, face thumbnails) from the redis
+  // cam:frames:<id> tail — no Mongo, heavy fields (embeddings, person crops)
+  // stripped.
+  const joinOverlay = sharedCameraFeed(
+    'cam_overlay', 100, { persons: [], faces: [], fps: 0 },
+    async (camId, state) => {
+      const raw = await pub.lIndex(`cam:frames:${camId}`, -1);
+      if (!raw) return null;
+      const d = JSON.parse(raw);
+      if (d.frame === state.last) return null;
+      state.last = d.frame;
+      return {
+        frame: d.frame,
+        fps: d.fps,
+        persons: (d.persons || []).map((p: any) => ({
+          tid: p.tid, bbox: p.bbox, known: !!p.has_emb,
+          hc: p.head_color, uc: p.upper_color, lc: p.lower_color,
+          pose: p.pose,
+        })),
+        faces: (d.faces || []).map((f: any) => ({
+          bbox: f.bbox, lm5: f.lm5, frontal: f.frontal, thumb: f.face_crop,
+        })),
+      };
+    },
+  );
+
   Meteor.publish("cam_overlay", function (camId: string) {
-    if (typeof camId !== 'string') { this.ready(); return; }
-    const self: any = this;
-    let lastFrame = -1;
-    self.added("cam_overlay", camId, { persons: [], faces: [], fps: 0 });
-    self.ready();
-    const timer = Meteor.setInterval(async () => {
-      try {
-        const raw = await pub.lIndex(`cam:frames:${camId}`, -1);
-        if (!raw) return;
-        const d = JSON.parse(raw);
-        if (d.frame === lastFrame) return;
-        lastFrame = d.frame;
-        self.changed("cam_overlay", camId, {
-          frame: d.frame,
-          fps: d.fps,
-          persons: (d.persons || []).map((p: any) => ({
-            tid: p.tid, bbox: p.bbox, known: !!p.has_emb,
-            hc: p.head_color, uc: p.upper_color, lc: p.lower_color,
-            pose: p.pose,
-          })),
-          faces: (d.faces || []).map((f: any) => ({
-            bbox: f.bbox, lm5: f.lm5, frontal: f.frontal, thumb: f.face_crop,
-          })),
-        });
-      } catch { /* transient */ }
-    }, 100);
-    self.onStop(() => Meteor.clearInterval(timer));
+    if (!this.userId) return this.ready();
+    if (typeof camId !== 'string' || !camId) return this.ready();
+    joinOverlay(camId, this);
   });
-  // Live VLM caption feed for one camera: polls the redis rolling list
-  // cam:captions:<id> (written by percept_caption.py) and pushes the tail as a
-  // single reactive doc { items: [{t, text}] }. Mirrors cam_overlay's pattern.
+
+  // Live VLM caption feed for one camera: the redis rolling list
+  // cam:captions:<id> (written by percept_caption.py), pushed as a single
+  // reactive doc { items: [{t, text}] }.
+  const joinCaptions = sharedCameraFeed(
+    'cam_captions', 1000, { items: [] },
+    async (camId, state) => {
+      const raw: string[] = await pub.lRange(`cam:captions:${camId}`, -40, -1);
+      const signature = `${raw.length}:${raw.length ? raw[raw.length - 1] : ''}`;
+      if (signature === state.last) return null;   // nothing new
+      state.last = signature;
+      const items = raw.map((s) => { try { return JSON.parse(s); } catch { return null; } })
+                       .filter(Boolean);
+      return { items };
+    },
+  );
+
   Meteor.publish("cam_captions", function (camId: string) {
-    if (typeof camId !== 'string') { this.ready(); return; }
-    const self: any = this;
-    let lastLen = -1, lastTail = '';
-    self.added("cam_captions", camId, { items: [] });
-    self.ready();
-    const timer = Meteor.setInterval(async () => {
-      try {
-        const raw: string[] = await pub.lRange(`cam:captions:${camId}`, -40, -1);
-        const tail = raw.length ? raw[raw.length - 1] : '';
-        if (raw.length === lastLen && tail === lastTail) return;  // nothing new
-        lastLen = raw.length; lastTail = tail;
-        const items = raw.map((s) => { try { return JSON.parse(s); } catch { return null; } })
-                         .filter(Boolean);
-        self.changed("cam_captions", camId, { items });
-      } catch { /* transient */ }
-    }, 1000);
-    self.onStop(() => Meteor.clearInterval(timer));
+    if (!this.userId) return this.ready();
+    if (typeof camId !== 'string' || !camId) return this.ready();
+    joinCaptions(camId, this);
   });
   Meteor.publish("caption_alerts", function (filter: any = {}, limit: number = 100) {
-    return CaptionAlertsCollection.find(filter, { sort: { timestamp: -1 }, limit });
+    if (!this.userId) return this.ready();
+    return CaptionAlertsCollection.find(sanitizeFilter(filter, CAPTION_FILTER), {
+      sort: { timestamp: -1 },
+      limit: clampLimit(limit, PAGE),
+    });
   });
   Meteor.publish("caption_alerts_unseen", function () {
+    if (!this.userId) return this.ready();
     return CaptionAlertsCollection.find({ seen: false }, { sort: { timestamp: -1 }, limit: 20 });
   });
   Meteor.publish("scenarios", function () {
+    if (!this.userId) return this.ready();
     return ScenariosCollection.find();
   });
   Meteor.publish("scenario_events", function (filter: any = {}, limit: number = 100) {
+    if (!this.userId) return this.ready();
     return ScenarioEventsCollection.find(filter, { sort: { triggeredAt: -1 }, limit });
   });
   Meteor.publish("scenario_events_unseen", function () {
+    if (!this.userId) return this.ready();
     return ScenarioEventsCollection.find({ seen: false }, { sort: { triggeredAt: -1 }, limit: 200 });
   });
   Meteor.publish("scenarios_v2", function () {
+    if (!this.userId) return this.ready();
     return ScenariosV2Collection.find();
   });
   Meteor.publish("scenario_events_v2", function (filter: any = {}, limit: number = 100, skip: number = 0, sort: any = { triggeredAt: -1 }) {
-    return ScenarioEventsV2Collection.find(filter, { sort, limit, skip });
+    if (!this.userId) return this.ready();
+    return ScenarioEventsV2Collection.find(sanitizeFilter(filter, SCENARIO_EVENT_FILTER), {
+      sort: sanitizeSort(sort, ['triggeredAt', 'severity'], { triggeredAt: -1 }),
+      limit: clampLimit(limit, PAGE),
+      skip: clampSkip(skip),
+    });
   });
   Meteor.publish("scenario_events_v2_unseen", function () {
+    if (!this.userId) return this.ready();
     return ScenarioEventsV2Collection.find({ seen: false }, { sort: { triggeredAt: -1 }, limit: 200 });
   });
   Meteor.publish("alertsArchive", function (filter, limit = 100, skip = 0, sort = {timestamp:-1}) {
-    return AlertsArchiveCollection.find(filter, { limit, skip, sort });
+    if (!this.userId) return this.ready();
+    return AlertsArchiveCollection.find(sanitizeFilter(filter, ALERTS_FILTER), {
+      limit: clampLimit(limit, PAGE),
+      skip: clampSkip(skip),
+      sort: sanitizeSort(sort, ['timestamp'], { timestamp: -1 }),
+    });
   });
   Meteor.publish('unseenIntruders', function(){
+    if (!this.userId) return this.ready();
     return IntruderAlertsCollection.find({ seen: false }, {sort: {timestamp: -1}, limit: 20});
   })
   Meteor.publish('unseenAlertsArchive', function(){
+    if (!this.userId) return this.ready();
     return AlertsArchiveCollection.find({ seen: false }, {sort: {timestamp: -1}, limit: 20});
   })
   Meteor.publish('intruderAlerts', function (filter, limit=100, skip=0, sort={timestamp:-1}) {
-    return IntruderAlertsCollection.find(filter, { limit, skip, sort });
+    if (!this.userId) return this.ready();
+    return IntruderAlertsCollection.find(sanitizeFilter(filter, INTRUDER_FILTER), {
+      limit: clampLimit(limit, PAGE),
+      skip: clampSkip(skip),
+      sort: sanitizeSort(sort, ['timestamp'], { timestamp: -1 }),
+    });
   });
 
   // Apollo status publish - sends status to client-side only collection
   Meteor.publish('apolloStatus', function () {
+    if (!this.userId) return this.ready();
     const self = this;
     // Add current status
     self.added('apolloStatus', 'apollo-status', { ...apolloStatus });
@@ -1021,19 +1210,32 @@ VisitsSummaryCollection.rawCollection().createIndex({ 'source': 1, 'timestamp': 
     self.ready();
   });
 
-  Meteor.publish("visitSummaryMeta" , function () {
+  Meteor.publish("visitSummaryMeta" , async function () {
+    if (!this.userId) return this.ready();
     const self = this;
-    const handler = VisitsSummaryCollection.find({idInfo:{$exists:true} }).observeChanges({
-      added(id, fields) {
+    // Awaited so the observer is fully attached before ready() is sent.
+    // Measured caveat: the initial documents still arrive shortly *after*
+    // ready on this Meteor version, so treat the collection reactively rather
+    // than assuming it is populated the moment the subscription completes.
+    //
+    // The cast is needed because the npm @types/meteor package is behind the
+    // runtime — Meteor 3's mongo package does ship observeChangesAsync.
+    const summaryCursor = VisitsSummaryCollection.find({ idInfo: { $exists: true } }) as any;
+    const handler = await summaryCursor.observeChangesAsync({
+      added(id: string, fields: Partial<VisitSummary>) {
         self.added('visitSummaryMeta', id, {idInfo: fields.idInfo});
       },
-      changed(id, fields) {
+      changed(id: string, fields: Partial<VisitSummary>) {
         self.changed('visitSummaryMeta', id, {idInfo: fields.idInfo});
       },
-      removed(id) {
+      removed(id: string) {
         self.removed('visitSummaryMeta', id);
       }
     })
+    // observeChanges pushes documents by hand, so Meteor never marks the
+    // subscription ready on its own: without this the client waits forever
+    // and any screen gated on isLoading() keeps spinning.
+    this.ready();
     this.onStop(() => {
       if (handler && typeof handler.stop === 'function') {
         handler.stop();
@@ -1041,13 +1243,12 @@ VisitsSummaryCollection.rawCollection().createIndex({ 'source': 1, 'timestamp': 
     });
   })
   Meteor.publish("visits", function (filter={}, limit = 100, skip = 0, sort = {timestamp:-1}) {
-    console.log('visits filter', filter, limit, skip, sort)
-    const options:{skip:number, limit?:number, sort:{[x:string]:any}} ={skip, sort};
-    if(limit !== 0){
-      options.limit = limit;
-    }
-    
-    return VisitsCollection.find(filter, options);
+    if (!this.userId) return this.ready();
+    return VisitsCollection.find(sanitizeFilter(filter, VISIT_FILTER), {
+      limit: clampLimit(limit, VISITS_PAGE),
+      skip: clampSkip(skip),
+      sort: sanitizeSort(sort, ['timestamp', 'tracking_id'], { timestamp: -1 }),
+    });
   });
   Meteor.publish('alertLists', function () {
     if(!this.userId) {
@@ -1063,8 +1264,10 @@ VisitsSummaryCollection.rawCollection().createIndex({ 'source': 1, 'timestamp': 
     if (filter._id && typeof filter._id === 'string' && !isNaN(Number(filter._id))) {
       filter._id = { $in: [filter._id, Number(filter._id)] };
     }
+    const query = sanitizeFilter(filter, SUMMARY_FILTER);
+    const page = { limit: clampLimit(limit, PAGE), skip: clampSkip(skip), sort: { timestamp: -1 as const } };
     const self = this;
-    const handler = VisitsSummaryCollection.find(filter, { limit, skip , sort:{timestamp:-1}}).observeChanges({
+    const handler = VisitsSummaryCollection.find(query, page).observeChanges({
       added(id, fields) {
         VisitsCollection.find({tracking_id:id}).countAsync().then(facesCount => {
           fields.faces = facesCount;
@@ -1090,26 +1293,35 @@ VisitsSummaryCollection.rawCollection().createIndex({ 'source': 1, 'timestamp': 
     
   });
   Meteor.publish('controllers', function () {
+    if (!this.userId) return this.ready();
     return ControllersCollection.find();
   })
   Meteor.publish('gates', function () {
+    if (!this.userId) return this.ready();
     return GatesCollection.find();
   });
-  Meteor.publish('usersMeta',function(){
+  Meteor.publish('usersMeta', async function(){
+    if (!this.userId) return this.ready();
     const self = this
-    const handler = Meteor.users.find({}, {fields: {username: 1}}).observeChanges({
-      added(id, fields) {
+    // Awaited for the same reason, and cast for the same reason, as
+    // visitSummaryMeta above.
+    const usersCursor = Meteor.users.find({}, { fields: { username: 1 } }) as any;
+    const handler = await usersCursor.observeChangesAsync({
+      added(id: string, fields: { username?: string }) {
         self.added('usersMeta', id, fields)
       },
-      changed(id, fields) {
+      changed(id: string, fields: { username?: string }) {
         if(fields.username){
           self.changed('usersMeta', id, fields)
         }
       },
-      removed(id) {
+      removed(id: string) {
         self.removed('usersMeta', id)
       }
   })
+    // Same as visitSummaryMeta: a hand-fed publication has to say when the
+    // initial batch is done.
+    this.ready();
     this.onStop(() => {
       if (handler && typeof handler.stop === 'function') {
         handler.stop();
@@ -1120,24 +1332,36 @@ VisitsSummaryCollection.rawCollection().createIndex({ 'source': 1, 'timestamp': 
     if(!this.userId) {
       return [];
     }
-    return AccessReportCollection.find(filter, { limit, skip, sort });
+    return AccessReportCollection.find(sanitizeFilter(filter, ACCESS_REPORT_FILTER), {
+      limit: clampLimit(limit, PAGE),
+      skip: clampSkip(skip),
+      sort: sanitizeSort(sort, ['timestamp'], { timestamp: -1 }),
+    });
   });
 
   Meteor.publish('temporaryCards', function (filter = {}, limit = 100, skip = 0, sort = { attachedAt: -1 }) {
     if (!this.userId) {
       return [];
     }
-    return TemporaryCardsCollection.find(filter, { limit, skip, sort });
+    return TemporaryCardsCollection.find(sanitizeFilter(filter, TEMPORARY_CARD_FILTER), {
+      limit: clampLimit(limit, PAGE),
+      skip: clampSkip(skip),
+      sort: sanitizeSort(sort, ['attachedAt'], { attachedAt: -1 }),
+    });
   });
 
-  Meteor.publish('alertItem', async(alertId : string)=>{
-    return IntruderAlertsCollection.find({_id:alertId})
+  Meteor.publish('alertItem', function (alertId: string) {
+    if (!this.userId) return this.ready();
+    if (typeof alertId !== 'string' || !alertId) return this.ready();
+    return IntruderAlertsCollection.find({ _id: alertId });
   })
-  Meteor.publish('settings', async()=>{
-    if (Meteor.userId()) {
-      if((await RolesCollection.findOneAsync({userId:String(Meteor.userId())}))?.role === 'admin')
-        return SettingsCollection.find()
-    }
+  Meteor.publish('settings', async function () {
+    // Written as a normal function so a non-admin gets a finished, empty
+    // subscription. The arrow version returned undefined, which Meteor never
+    // marks ready — the settings screen span forever for anyone but an admin.
+    if (!this.userId) return this.ready();
+    if (!(await isAdmin(this.userId))) return this.ready();
+    return SettingsCollection.find();
   })
 
   // Current user's role entry + all role definitions (used by desktop for app filtering)
@@ -1166,19 +1390,25 @@ VisitsSummaryCollection.rawCollection().createIndex({ 'source': 1, 'timestamp': 
   });
 
   Meteor.publish('tgSessions', function(){
+    if (!this.userId) return this.ready();
     return TgSessions.find()
   })
 
   Meteor.publish('recordings', function(camIds: string[] = [], dayStart = 0, dayEnd = 0, limit = 200) {
-    if (!this.userId || !camIds.length) return [];
+    if (!this.userId) return this.ready();
+    const ids = Array.isArray(camIds) ? camIds.filter((id) => typeof id === 'string').slice(0, 200) : [];
+    if (!ids.length) return this.ready();
+    const from = new Date(typeof dayStart === 'number' ? dayStart : 0);
+    const to = new Date(typeof dayEnd === 'number' ? dayEnd : 0);
     return RecordingsCollection.find(
-      { camId: { $in: camIds }, startedAt: { $gte: new Date(dayStart), $lt: new Date(dayEnd) } },
-      { sort: { startedAt: 1 }, limit },
+      { camId: { $in: ids }, startedAt: { $gte: from, $lt: to } },
+      { sort: { startedAt: 1 }, limit: clampLimit(limit, { fallback: 200, max: 2000 }) },
     );
   });
 
   Meteor.methods({
     async restartCamHandler(id:string){
+      await requirePermission(this, PERMISSIONS.CAMERA_CONTROL);
       const cam = await CamsCollection.findOneAsync({_id:id});
       if(cam && cam._id && cam.streamurl){
         // restart = re-sync the camera's source on the perception engine
@@ -1203,19 +1433,32 @@ VisitsSummaryCollection.rawCollection().createIndex({ 'source': 1, 'timestamp': 
       return true;
     },
     async doApolloSync(){
+      await requirePermission(this, PERMISSIONS.INTEGRATION_CONFIGURE);
       syncApolloData();
       return true;
     },
     async setTgBot(token:string){
+      // Replaces the bot identity and drops every stored chat session, so it
+      // is an administrator action, not merely a signed-in one.
+      await requirePermission(this, PERMISSIONS.INTEGRATION_CONFIGURE);
+      if (typeof token !== 'string' || !token.trim()) {
+        throw new Meteor.Error('invalid-token', 'A Telegram bot token is required.');
+      }
       await SettingsCollection.removeAsync({type:'telegram'})
       await SettingsCollection.insertAsync({type:'telegram', config:token})
       await TgSessions.removeAsync({})
       tgBot = initBot(token);
     },
     async getBotLink(){
+      requireUser(this);
       return tgBot ? (await tgBot.getMe()).username : ''
     },
     async setApacsConfig(config:APIConfig){
+      // Repoints the access-control integration: administrator only.
+      await requirePermission(this, PERMISSIONS.INTEGRATION_CONFIGURE);
+      if (!config || typeof config.url !== 'string' || typeof config.username !== 'string') {
+        throw new Meteor.Error('invalid-config', 'An APACS url and username are required.');
+      }
       //restart the apollowrapper
       if(ApolloApi){
         ApolloApi.stop()
@@ -1231,9 +1474,9 @@ VisitsSummaryCollection.rawCollection().createIndex({ 'source': 1, 'timestamp': 
       ApolloApi.initialize()
     },
     async unlockGate(gateId: string){
-      if (!this.userId) {
-        throw new Meteor.Error('not-authorized', 'You must be logged in to unlock a gate.');
-      }
+      // Opening a door is a capability, not a side effect of having an
+      // account: authorisation is checked before the gate is even looked up.
+      await requirePermission(this, PERMISSIONS.GATE_UNLOCK);
       if (!gateId) {
         throw new Meteor.Error('invalid-gate-id', 'Gate ID must be provided.');
       }
@@ -1260,15 +1503,18 @@ VisitsSummaryCollection.rawCollection().createIndex({ 'source': 1, 'timestamp': 
       }
     },
     updateWorkspace: async function(apps:App[]){
-      if(this.userId) {
-        if(await WorkspacesCollection.findOneAsync({user:this.userId}) === undefined){
-           await WorkspacesCollection.insertAsync({user:this.userId, apps:apps})
-        }
-        WorkspacesCollection.updateAsync({user:this.userId}, {$set:{apps}})
+      const userId = requireUser(this);
+      if (await WorkspacesCollection.findOneAsync({ user: userId }) === undefined) {
+        await WorkspacesCollection.insertAsync({ user: userId, apps });
+        return;
       }
+      await WorkspacesCollection.updateAsync({ user: userId }, { $set: { apps } });
     },
     getUserName: async function(userId:string):Promise<string> {
-      if(!userId) return '';
+      // Resolving ids to usernames is account enumeration for anyone who can
+      // reach the socket, so it needs a session.
+      requireUser(this);
+      if(!userId || typeof userId !== 'string') return '';
       const user = await Meteor.users.findOneAsync({_id:userId});
       return user?.username || '';
     },

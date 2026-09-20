@@ -164,6 +164,9 @@ function HeatmapsRenderer() {
                         )}
                     />
                     <DateRangePicker
+                        // keep the calendar inside the screen: these windows often sit near
+                        // the right edge, where the default placement puts it out of view
+                        preventOverflow
                         placeholder="Select date/time range"
                         format="dd.MM.yy HH:mm:ss"
                         caretAs={CalendarMonthIcon}

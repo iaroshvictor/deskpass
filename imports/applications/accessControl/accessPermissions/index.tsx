@@ -269,7 +269,7 @@ const AccessPermissionsComponent = () => {
                                                 Deny All
                                             </Button>
                                         }
-                                        sx={{ backgroundColor: '#e8f5e9' }}
+                                        sx={{ backgroundColor: 'rgba(from var(--mui-palette-success-main) r g b / 0.14)' }}
                                     />
                                     <Divider />
                                     <CardContent>
@@ -324,7 +324,7 @@ const AccessPermissionsComponent = () => {
                                                 Grant All
                                             </Button>
                                         }
-                                        sx={{ backgroundColor: '#ffebee' }}
+                                        sx={{ backgroundColor: 'rgba(from var(--mui-palette-error-main) r g b / 0.14)' }}
                                     />
                                     <Divider />
                                     <CardContent>

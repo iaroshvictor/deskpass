@@ -107,7 +107,7 @@ const ParBadge = ({par}: {par?: Record<string, number | string>}) => {
                     <Stack direction='row' spacing={1}>
                         {PAR_COLOR_KEYS.map(k => par[k] && (
                             <Stack key={k} direction='row' spacing={0.3} alignItems='center'>
-                                <Box sx={{width:8, height:8, borderRadius:'50%', bgcolor:String(par[k]), border:'1px solid #fff', flexShrink:0}} />
+                                <Box sx={{width:8, height:8, borderRadius:'50%', bgcolor:String(par[k]), border:'1px solid', borderColor:'divider', flexShrink:0}} />
                                 <Typography variant="caption">{k.replace('_color','')}: {par[k]}</Typography>
                             </Stack>
                         ))}
@@ -122,7 +122,7 @@ const ParBadge = ({par}: {par?: Record<string, number | string>}) => {
         }>
             <Stack direction='row' spacing={0.3} justifyContent='center' sx={{cursor:'default'}}>
                 {colors.slice(0,3).map((c, i) => (
-                    <Box key={i} sx={{width:8, height:8, borderRadius:'50%', bgcolor:c, border:'1px solid #ccc', flexShrink:0}} />
+                    <Box key={i} sx={{width:8, height:8, borderRadius:'50%', bgcolor:c, border:'1px solid', borderColor:'divider', flexShrink:0}} />
                 ))}
                 {activeAttrs.length > 0 && (
                     <Typography variant="caption" sx={{fontSize:'0.55rem', lineHeight:1, color:'text.secondary'}}>

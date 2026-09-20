@@ -47,7 +47,10 @@ const AlertItemModal = ({alertId, onCloseModal}:props) => {
     }, [myIntruder.seenBy]);
     const handleSeen =()=>{
         try{
-            Meteor.callAsync('setSeenIntruder', alertId)  }catch(e){}
+            Meteor.callAsync('setSeenIntruder', alertId)
+        }catch(e){
+            console.error('failed to mark intruder as seen:', e);
+        }
         //onCloseModal();
     }
     const handleAddFaceModel =()=>{

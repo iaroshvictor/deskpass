@@ -152,7 +152,7 @@ const EntrollRender =()=>{
                                 color: '#fff',
                                 p:1,
                                 transform: 'translateX(-50%)',
-                                backgroundColor: '#0000006e',
+                                backgroundColor: 'rgba(0,0,0,0.43)',
                                 minWidth: '150px',
                                 borderRadius: '4px'
                             }}
@@ -181,7 +181,7 @@ const EntrollRender =()=>{
                         {selectedVisitor
                             ?(
                             <>
-                                <Typography variant='subtitle2' sx={{backgroundColor:'#3d3d3d', color:'#fff', textAlign:'center', p:'8px 0', width:'100%'}} >
+                                <Typography variant='subtitle2' sx={{backgroundColor:'surface.sunken', color:'text.primary', textAlign:'center', p:'8px 0', width:'100%'}} >
                                     Aquire face Information
                                 </Typography>
                             
@@ -201,7 +201,7 @@ const EntrollRender =()=>{
                             </>
                         ):(
                             <>
-                                <Typography variant='subtitle2' sx={{backgroundColor:'#3d3d3d', color:'#fff', textAlign:'center', p:'8px 0', width:'100%'}} >
+                                <Typography variant='subtitle2' sx={{backgroundColor:'surface.sunken', color:'text.primary', textAlign:'center', p:'8px 0', width:'100%'}} >
                                     Select the person you wish to enroll
                                 </Typography>
                                 <Stack direction = 'row' spacing={2}>
@@ -228,7 +228,7 @@ const EntrollRender =()=>{
             )}
             {activeStep === 2 && (
                 <>
-                    <Typography variant='subtitle2' sx={{backgroundColor:'#3d3d3d', color:'#fff', textAlign:'center', p:'8px 0', width:'100%'}} >
+                    <Typography variant='subtitle2' sx={{backgroundColor:'surface.sunken', color:'text.primary', textAlign:'center', p:'8px 0', width:'100%'}} >
                         Click the items you wish to remove from the list
                     </Typography>
                     <Alert variant="filled" severity="warning">

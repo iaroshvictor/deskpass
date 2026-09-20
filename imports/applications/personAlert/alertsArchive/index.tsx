@@ -104,6 +104,9 @@ import AlertItemModal from './itemModal'
                  }}
            />
             <DateRangePicker
+                // keep the calendar inside the screen: these windows often sit near
+                // the right edge, where the default placement puts it out of view
+                preventOverflow
                 style={{width:'100%'}}
                 format="dd.MM.yy HH:mm:ss"
                 placeholder="Select date/time range"
@@ -190,5 +193,9 @@ const AlertsArchive: AppType = {
     appIcon: <Icon />,
     render: AlertsArchiveRenderer,
     module: 'personAlert',
+    // Superseded by Event Archive, which shows person-list alerts and scenario
+    // firings in one list. Kept whole and reachable in code: drop this flag to
+    // put the shortcut back.
+    hideShortcut: true,
 };
 export default AlertsArchive;

@@ -89,7 +89,7 @@ export default function AppWindow({children, appTitle, appIcon, minimized,fullSc
               opacity: !minimized ? 1 : 0,
               transition: `opacity ${duration}ms ease-in-out`,
             }}>
-                <Box className="appTopBar" sx={{p:0.5, background:'black', cursor:'grab'}}>
+                <Box className="appTopBar" sx={{p:0.5, background:'var(--mui-palette-surface-sunken)', cursor:'grab'}}>
                     <Stack sx={{width:'100%'}} direction='row' onDoubleClick={()=>{triggerFullScreen(appId)}}>
                         {appIcon}
                         <Typography sx={{ml:1, width:'100%'}} variant='subtitle2'>{appTitle}</Typography>

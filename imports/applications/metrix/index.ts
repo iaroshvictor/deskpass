@@ -1,15 +1,10 @@
 import HeatmapsApp from './heatmaps';
-import heatmapMethods from './heatmaps/serverMethods';
 import TrafficTimelineApp from './trafficTimeline';
-import trafficTimelineMethods from './trafficTimeline/serverMethods';
 
-export const MetrixMethods = {
-    ...heatmapMethods,
-    ...trafficTimelineMethods
-};
+// Server methods live in ./methods.ts — importing them here would ship them to
+// the browser along with this barrel.
 
 export default {
     HeatmapsApp,
     TrafficTimelineApp
 };
-

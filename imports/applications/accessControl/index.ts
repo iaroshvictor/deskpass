@@ -7,18 +7,10 @@ import DivisionsManagementApp from './divisionsManagement';
 // import TimeReportsApp from './timeReports';
 import GatesControlApp from './gatesControl';
 import TemporaryCardsApp from './temporaryCards';
-
-import ControllerMethods from './controllers/serverMethods';
-import GateMethods from './gates/serverMethods';
-import DivisionMethods from './divisionsManagement/serverMethods';
-import IntruderMethods from './intruderAlerts/servermethods';
 import IntruderAlertsArchive from './intruderAlerts';
-import AttendanceMethods from './attendanceArchive/serverMethods';
-import AccessPermissionsMethods from './accessPermissions/serverMethods';
-import TemporaryCardsMethods from './temporaryCards/serverMethods';
 
-const AccessControllMethods = {...ControllerMethods, ...GateMethods, ...DivisionMethods, ...IntruderMethods, ...AttendanceMethods, ...AccessPermissionsMethods, ...TemporaryCardsMethods};
-export { AccessControllMethods };
+// Server methods live in ./methods.ts — importing them here would ship them to
+// the browser along with this barrel.
 
 export default {
     ControllersApp,

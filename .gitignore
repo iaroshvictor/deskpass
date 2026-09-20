@@ -6,3 +6,10 @@ _build
 */build-chunks
 .rsdoctor
 tsconfig.tsbuildinfo
+
+# Playwright output
+test-results/
+playwright-report/
+
+# Local runtime settings (copy settings-development.example.json)
+settings-development.json
