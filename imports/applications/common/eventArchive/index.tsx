@@ -64,6 +64,7 @@ type Row = {
   seen: boolean;
   seenBy?: string;
   seenAt?: Date | null;
+  suppressed?: boolean;      // a duplicate the server silenced, nobody looked
   face?: string;             // base64 thumbnail, watch-list rows only
 };
 
@@ -94,8 +95,25 @@ const EventArchiveRenderer = () => {
     return () => clearTimeout(t);
   }, [search]);
 
-  const wantsWatchlist = source !== 'scenario';
-  const wantsScenario = source !== 'watchlist';
+  // Narrowing by something only one source has — a scenario, a severity, a
+  // person — is a statement about what the operator is looking for, so the
+  // other source steps aside. Without this, picking one scenario still left
+  // every watch-list match in the list and the filter looked broken.
+  const scenarioNarrowed = scenarioIds.length > 0 || severities.length > 0 || message !== '';
+  const watchlistNarrowed = lists.length > 0 || persons.length > 0;
+  const wantsWatchlist = source === 'watchlist'
+    || (source === 'all' && (!scenarioNarrowed || watchlistNarrowed));
+  const wantsScenario = source === 'scenario'
+    || (source === 'all' && (!watchlistNarrowed || scenarioNarrowed));
+  // Which controls are on screen is the tab's business alone. Tying it to the
+  // filters too would hide the scenario controls the moment a person filter
+  // was set, and there would be no way to narrow both at once.
+  const showWatchlistFilters = source !== 'scenario';
+  const showScenarioFilters = source !== 'watchlist';
+  const hiddenBySource = source !== 'all' ? null
+    : !wantsWatchlist ? 'Watch-list matches are hidden while a scenario filter is set.'
+    : !wantsScenario ? 'Scenario events are hidden while a person or list filter is set.'
+    : null;
 
   const alertFilter = React.useMemo(() => {
     const f: { [k: string]: any } = {};
@@ -165,7 +183,11 @@ const EventArchiveRenderer = () => {
           what: personName(a.idInfo as unknown as string),
           detail: alertLists.find(l => l._id === a.listId)?.name ?? '—',
           seen: !!a.seen,
-          seenBy: a.seenBy,
+          // A repeat sighting inside the person's alertpause window is stored
+          // already seen, with 'root' standing in for the operator. Showing it
+          // as a name would credit a person who never looked.
+          seenBy: a.seenBy === 'root' ? undefined : a.seenBy,
+          suppressed: a.seenBy === 'root',
           seenAt: a.seenAt,
           face: a.face_b64,
         });
@@ -243,7 +265,7 @@ const EventArchiveRenderer = () => {
 
       {/* ── filters that only make sense for one source ── */}
       <Stack direction="row" spacing={2} alignItems="center" sx={{ mb: 2, flexWrap: 'wrap', gap: 1 }}>
-        {wantsWatchlist && (
+        {showWatchlistFilters && (
           <>
             <Autocomplete
               sx={{ minWidth: 200, flex: 1 }} multiple options={alertLists} size="small"
@@ -262,7 +284,7 @@ const EventArchiveRenderer = () => {
             />
           </>
         )}
-        {wantsScenario && (
+        {showScenarioFilters && (
           <>
             <Autocomplete
               sx={{ minWidth: 200, flex: 1 }} multiple options={scenarios} size="small"
@@ -285,6 +307,12 @@ const EventArchiveRenderer = () => {
           Mark all seen
         </Button>
       </Stack>
+
+      {hiddenBySource && (
+        <Typography variant="caption" sx={{ display: 'block', mb: 1, color: 'text.secondary' }}>
+          {hiddenBySource}
+        </Typography>
+      )}
 
       {/* ── one list ── */}
       <Table size="small">
@@ -327,6 +355,11 @@ const EventArchiveRenderer = () => {
                   <Typography variant="caption" sx={{ ml: 0.5, color: 'text.secondary' }}>
                     {operators.find(u => u._id === row.seenBy)?.username ?? row.seenBy}
                     {row.seenAt ? ` · ${row.seenAt.toLocaleString()}` : ''}
+                  </Typography>
+                )}
+                {row.suppressed && (
+                  <Typography variant="caption" sx={{ ml: 0.5, color: 'text.disabled' }}>
+                    repeat, silenced
                   </Typography>
                 )}
               </TableCell>
