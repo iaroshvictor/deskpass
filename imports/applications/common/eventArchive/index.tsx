@@ -52,6 +52,27 @@ const SEVERITY_COLOR: Record<string, 'info' | 'warning' | 'error'> = {
   info: 'info', warning: 'warning', critical: 'error',
 };
 
+// What the scenario was watching for, in the operator's words. Severity does
+// not answer this: a crowd and a camera going dark can both be critical.
+const CONDITION_LABEL: Record<string, string> = {
+  person_arrived: 'person arrived',
+  person_present: 'person present',
+  person_dwell: 'person lingering',
+  count: 'too many people',
+  personCount: 'too many people',
+  motion: 'motion',
+  crossing: 'line crossed',
+  camera: 'camera up or down',
+  scene: 'scene keyword',
+};
+
+const IDENTITY_LABEL: Record<string, string> = {
+  any: 'anyone',
+  known: 'recognised',
+  unknown: 'unrecognised',
+  ids: 'specific people',
+};
+
 /** One row of the merged list, whichever collection it came from. */
 type Row = {
   id: string;
@@ -85,6 +106,13 @@ const EventArchiveRenderer = () => {
   const [scenarioIds, setScenarioIds] = React.useState<string[]>([]);
   const [severities, setSeverities] = React.useState<string[]>([]);
   const [message, setMessage] = React.useState('');
+  // These two live on the scenario, not on the event, so they are matched by
+  // joining each event to its scenario in the browser. That means they narrow
+  // the page already fetched — a rare condition can look empty while older
+  // matches sit on the next page. Moving them server-side would mean storing
+  // the condition on the event, or a whitelist entry and a lookup.
+  const [conditions, setConditions] = React.useState<string[]>([]);
+  const [identities, setIdentities] = React.useState<string[]>([]);
 
   const reset = <T,>(set: (v: T) => void) => (v: T) => { set(v); setPage(0); };
 
@@ -99,7 +127,8 @@ const EventArchiveRenderer = () => {
   // person — is a statement about what the operator is looking for, so the
   // other source steps aside. Without this, picking one scenario still left
   // every watch-list match in the list and the filter looked broken.
-  const scenarioNarrowed = scenarioIds.length > 0 || severities.length > 0 || message !== '';
+  const scenarioNarrowed = scenarioIds.length > 0 || severities.length > 0 || message !== ''
+    || conditions.length > 0 || identities.length > 0;
   const watchlistNarrowed = lists.length > 0 || persons.length > 0;
   const wantsWatchlist = source === 'watchlist'
     || (source === 'all' && (!scenarioNarrowed || watchlistNarrowed));
@@ -158,6 +187,22 @@ const EventArchiveRenderer = () => {
     sort: { triggeredAt: -1 }, limit: PAGE,
   }), [scenarioFilter, page]);
 
+  const scenarioOf = React.useMemo(
+    () => new Map(scenarios.map(s => [s._id as string, s])), [scenarios]);
+  const conditionOf = (scenarioId: string) =>
+    (scenarioOf.get(scenarioId)?.rule?.condition as { kind?: string } | undefined)?.kind;
+  const identityOf = (scenarioId: string) =>
+    ((scenarioOf.get(scenarioId)?.rule?.condition as any)?.person?.identity) as string | undefined;
+
+  // Offer only what the scenarios in this deployment actually use, so the
+  // control never lists a condition nobody watches for.
+  const conditionOptions = React.useMemo(() => [...new Set(
+    scenarios.map(s => (s.rule?.condition as { kind?: string } | undefined)?.kind).filter(Boolean),
+  )] as string[], [scenarios]);
+  const identityOptions = React.useMemo(() => [...new Set(
+    scenarios.map(s => (s.rule?.condition as any)?.person?.identity).filter(Boolean),
+  )] as string[], [scenarios]);
+
   const camName = (id: string) => camList.find(c => c._id === id)?.name ?? id;
   const personName = (id: string) => {
     const p = people.find(x => String(x._id) === String(id));
@@ -196,6 +241,8 @@ const EventArchiveRenderer = () => {
 
     if (wantsScenario) {
       for (const e of events) {
+        if (conditions.length && !conditions.includes(conditionOf(e.scenarioId) ?? '')) continue;
+        if (identities.length && !identities.includes(identityOf(e.scenarioId) ?? '')) continue;
         out.push({
           id: e._id as string,
           source: 'scenario',
@@ -210,7 +257,8 @@ const EventArchiveRenderer = () => {
     }
 
     return out.sort((x, y) => y.at.getTime() - x.at.getTime());
-  }, [alerts, events, wantsWatchlist, wantsScenario, lists, persons, alertLists, people, camList]);
+  }, [alerts, events, wantsWatchlist, wantsScenario, lists, persons, conditions, identities,
+      alertLists, people, camList, scenarioOf]);
 
   const markSeen = (row: Row) => {
     if (row.source === 'watchlist') Meteor.callAsync('setSeenAlert', row.id);
@@ -293,6 +341,24 @@ const EventArchiveRenderer = () => {
               onChange={(_e, value) => reset(setScenarioIds)(value.map(v => v._id as string))}
               renderInput={(p) => <TextField {...p} label="Scenario" variant="outlined" />}
             />
+            {conditionOptions.length > 1 && (
+              <Autocomplete
+                sx={{ minWidth: 180, flex: 1 }} multiple options={conditionOptions} size="small"
+                getOptionLabel={(o) => CONDITION_LABEL[o] ?? o}
+                value={conditions}
+                onChange={(_e, value) => reset(setConditions)(value)}
+                renderInput={(p) => <TextField {...p} label="Condition" variant="outlined" />}
+              />
+            )}
+            {identityOptions.length > 1 && (
+              <Autocomplete
+                sx={{ minWidth: 170, flex: 1 }} multiple options={identityOptions} size="small"
+                getOptionLabel={(o) => IDENTITY_LABEL[o] ?? o}
+                value={identities}
+                onChange={(_e, value) => reset(setIdentities)(value)}
+                renderInput={(p) => <TextField {...p} label="Who" variant="outlined" />}
+              />
+            )}
             <ToggleButtonGroup size="small" value={severities}
               onChange={(_e, value: string[]) => reset(setSeverities)(value)}>
               <ToggleButton value="info">info</ToggleButton>
@@ -309,10 +375,18 @@ const EventArchiveRenderer = () => {
       </Stack>
 
       {hiddenBySource && (
-        <Typography variant="caption" sx={{ display: 'block', mb: 1, color: 'text.secondary' }}>
+        <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary' }}>
           {hiddenBySource}
         </Typography>
       )}
+      {(conditions.length > 0 || identities.length > 0) && (
+        // Say it rather than let the operator wonder: these two match against
+        // the scenario, which is only known for the events already fetched.
+        <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary' }}>
+          Condition and Who narrow the {PAGE} events on this page — step back with Older to search further.
+        </Typography>
+      )}
+      <Box sx={{ mb: 1 }} />
 
       {/* ── one list ── */}
       <Table size="small">

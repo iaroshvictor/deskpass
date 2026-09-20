@@ -29,6 +29,9 @@ const CLEAN = process.argv.includes('--clean');
 // happens a few seconds after boot; this flag retries just that part without
 // duplicating the data.
 const OPERATORS_ONLY = process.argv.includes('--operators-only');
+// Rebuild scenarios and their events without touching anything else — the
+// cameras keep their ids and their stream URLs.
+const SCENARIOS_ONLY = process.argv.includes('--scenarios-only');
 
 // Collections this script writes to, in the order they should be cleaned.
 const COLLECTIONS = [
@@ -83,6 +86,94 @@ async function clean(db) {
   const { deletedCount } = await db.collection('roles').deleteMany({ [MARKER]: true });
   if (deletedCount) console.log(`  removed ${deletedCount} operator account(s)`);
   console.log(`removed ${total + deletedCount} seeded document(s)`);
+}
+
+/**
+ * Scenarios and the events they fired.
+ *
+ * Separate from seed() so `--scenarios-only` can rebuild just these: the
+ * cameras outlive a reseed here, which matters when one of them has been
+ * pointed at a real stream by hand.
+ */
+async function seedScenarios(db, camIds, camNames) {
+// --- scenarios -----------------------------------------------------------
+// The conditions below are the ones the engine and the builder actually
+// speak (imports/api/scenarioModel.ts). An invented shape would seed a
+// database no running system could produce, and the screens that read the
+// condition — the archive's filters among them — would have nothing to show.
+const scenarioIds = [];
+const scenarioDefs = [
+  {
+    name: 'Unknown person in server room', severity: 'critical', enabled: true,
+    condition: { kind: 'person_arrived', person: { identity: 'unknown' } },
+    details: (i) => ({ tracking_id: 1000 + i, idInfo: null, similarity: 0 }),
+    message: (cam) => `Unknown person arrived on ${cam}`,
+  },
+  {
+    name: 'Crowd at the main entrance', severity: 'warning', enabled: true,
+    condition: { kind: 'count', op: 'gte', value: 3 },
+    details: (i) => ({ count: 3 + (i % 4) }),
+    message: (cam) => `Too many people on ${cam}`,
+  },
+  {
+    name: 'Movement after hours', severity: 'info', enabled: false,
+    condition: { kind: 'motion', state: 'present', threshold: 1.0 },
+    schedule: { days: [], from: '22:00', to: '06:00' },
+    details: () => ({}),
+    message: (cam) => `Movement after hours on ${cam}`,
+  },
+  {
+    name: 'Weapon mentioned in scene', severity: 'critical', enabled: true,
+    condition: { kind: 'scene', keywords: ['gun', 'knife', 'fight'] },
+    details: (i) => ({ keyword: ['gun', 'knife', 'fight'][i % 3], caption: 'a person holding something' }),
+    message: (cam) => `Scene keyword on ${cam}`,
+  },
+  {
+    name: 'Known visitor at reception', severity: 'info', enabled: true,
+    condition: { kind: 'person_arrived', person: { identity: 'known', similarity: 0.7 } },
+    details: (i) => ({ tracking_id: 2000 + i, idInfo: null, similarity: 0.8 }),
+    message: (cam) => `Recognised visitor arrived on ${cam}`,
+  },
+  {
+    name: 'Camera stopped responding', severity: 'warning', enabled: true,
+    condition: { kind: 'camera', state: 'offline' },
+    details: (i) => ({ silentSec: 30 + i }),
+    message: (cam) => `Camera offline (${30}s silent) on ${cam}`,
+  },
+];
+for (let i = 0; i < scenarioDefs.length; i++) {
+  const d = scenarioDefs[i];
+  const { insertedId } = await db.collection('scenarios_v2').insertOne(seeded({
+    name: d.name,
+    enabled: d.enabled,
+    scope: { kind: 'cams', camIds: [camIds[i % camIds.length]] },
+    rule: { condition: d.condition },
+    ...(d.schedule ? { schedule: d.schedule } : {}),
+    severity: d.severity,
+    cooldownSec: 60,
+    createdAt: daysAgo(10 - i),
+    triggerCount: 0,
+  }));
+  scenarioIds.push(String(insertedId));
+}
+
+const events = [];
+for (let i = 0; i < 55; i++) {
+  const n = i % scenarioIds.length;
+  const d = scenarioDefs[n];
+  const cam = pick(camNames, i);
+  events.push(seeded({
+    scenarioId: scenarioIds[n],
+    scenarioName: d.name,
+    severity: d.severity,
+    camId: camIds[i % camIds.length],
+    message: d.message(cam),
+    details: d.details(i),
+    triggeredAt: minutesAgo(i * 19),
+    seen: i % 3 !== 0,
+  }));
+}
+await db.collection('scenario_events_v2').insertMany(events);
 }
 
 async function seed(db) {
@@ -280,42 +371,7 @@ async function seed(db) {
   }
   await db.collection('captionAlerts').insertMany(captions);
 
-  // --- scenarios -----------------------------------------------------------
-  const scenarioIds = [];
-  const scenarioDefs = [
-    { name: 'Unknown person in server room', severity: 'critical' },
-    { name: 'Crowd at the main entrance', severity: 'warning' },
-    { name: 'Movement after hours', severity: 'info' },
-  ];
-  for (let i = 0; i < scenarioDefs.length; i++) {
-    const { insertedId } = await db.collection('scenarios_v2').insertOne(seeded({
-      name: scenarioDefs[i].name,
-      enabled: i !== 2,
-      scope: { kind: 'cams', camIds: [camIds[i % camIds.length]] },
-      rule: { condition: { kind: 'personCount', operator: 'gt', value: i + 1 } },
-      severity: scenarioDefs[i].severity,
-      cooldownSec: 60,
-      createdAt: daysAgo(10 - i),
-      triggerCount: 0,
-    }));
-    scenarioIds.push(String(insertedId));
-  }
-
-  const events = [];
-  for (let i = 0; i < 55; i++) {
-    const s = i % scenarioIds.length;
-    events.push(seeded({
-      scenarioId: scenarioIds[s],
-      scenarioName: scenarioDefs[s].name,
-      severity: scenarioDefs[s].severity,
-      camId: camIds[i % camIds.length],
-      message: `${scenarioDefs[s].name} triggered on ${pick(camNames, i)}`,
-      details: { count: (i % 5) + 1 },
-      triggeredAt: minutesAgo(i * 19),
-      seen: i % 3 !== 0,
-    }));
-  }
-  await db.collection('scenario_events_v2').insertMany(events);
+  await seedScenarios(db, camIds, camNames);
 
   // --- misc ----------------------------------------------------------------
   const cards = [];
@@ -423,6 +479,16 @@ const db = mongo.db();
 if (CLEAN) {
   console.log('removing seeded data...');
   await clean(db);
+} else if (SCENARIOS_ONLY) {
+  console.log('rebuilding scenarios and their events...');
+  for (const name of ['scenarios_v2', 'scenario_events_v2']) {
+    const { deletedCount } = await db.collection(name).deleteMany({ [MARKER]: true });
+    console.log(`  ${name}: removed ${deletedCount}`);
+  }
+  const cams = await db.collection('cams').find({ [MARKER]: true }).toArray();
+  if (!cams.length) throw new Error('no seeded cameras to attach scenarios to; run a full seed first');
+  await seedScenarios(db, cams.map(c => String(c._id)), cams.map(c => c.name));
+  console.log(`  scenarios rebuilt against ${cams.length} cameras`);
 } else if (OPERATORS_ONLY) {
   console.log('creating operator accounts...');
   for (const op of await seedOperators(db)) {
