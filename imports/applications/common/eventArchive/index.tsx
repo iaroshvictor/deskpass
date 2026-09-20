@@ -98,6 +98,12 @@ type Row = {
   seenAt?: Date | null;
   suppressed?: boolean;      // a duplicate the server silenced, nobody looked
   face?: string;             // base64 thumbnail, watch-list rows only
+  // Every filter on this screen has a column, so a narrowed list shows what
+  // it was narrowed by. Scenario rows only.
+  zone?: string;
+  line?: string;
+  condition?: string;
+  identity?: string;
 };
 
 const EventArchiveRenderer = () => {
@@ -267,9 +273,15 @@ const EventArchiveRenderer = () => {
 
     if (wantsScenario) {
       for (const e of events) {
-        if (conditions.length && !conditions.includes(conditionOf(e.scenarioId) ?? '')) continue;
-        if (identities.length && !identities.includes(identityOf(e.scenarioId) ?? '')) continue;
+        const kind = conditionOf(e.scenarioId);
+        const who = identityOf(e.scenarioId);
+        if (conditions.length && !conditions.includes(kind ?? '')) continue;
+        if (identities.length && !identities.includes(who ?? '')) continue;
         out.push({
+          zone: e.zoneDefId ? (zoneDefs.find(z => z._id === e.zoneDefId)?.label ?? e.zoneDefId) : undefined,
+          line: e.lineDefId ? (lineDefs.find(l => l._id === e.lineDefId)?.label ?? e.lineDefId) : undefined,
+          condition: kind ? (CONDITION_LABEL[kind] ?? kind) : undefined,
+          identity: who ? (IDENTITY_LABEL[who] ?? who) : undefined,
           id: e._id as string,
           source: 'scenario',
           at: new Date(e.triggeredAt),
@@ -284,9 +296,19 @@ const EventArchiveRenderer = () => {
 
     return out.sort((x, y) => y.at.getTime() - x.at.getTime());
   }, [alerts, events, wantsWatchlist, wantsScenario, lists, persons, conditions, identities,
-      alertLists, people, camList, scenarioOf]);
+      alertLists, people, camList, scenarioOf, zoneDefs, lineDefs]);
 
   const pageRows = rows.slice(page * PAGE, (page + 1) * PAGE);
+  // Thirteen columns of mostly dashes helps nobody: each of these appears
+  // when the rows on screen have something to put in it.
+  const shows = {
+    zone: pageRows.some(r => r.zone),
+    line: pageRows.some(r => r.line),
+    condition: pageRows.some(r => r.condition),
+    identity: pageRows.some(r => r.identity),
+    face: pageRows.some(r => r.face),
+  };
+  const columnCount = 8 + Object.values(shows).filter(Boolean).length;
   const windowFull = windowSize >= WINDOW_MAX;
   const canGoOlder = !windowFull && rows.length >= (page + 1) * PAGE;
 
@@ -441,13 +463,17 @@ const EventArchiveRenderer = () => {
       <Table size="small">
         <TableHead>
           <TableRow>
-            <TableCell />
+            {shows.face && <TableCell />}
             <TableCell>Time</TableCell>
             <TableCell>Source</TableCell>
             <TableCell>Severity</TableCell>
+            {shows.condition && <TableCell>Condition</TableCell>}
+            {shows.identity && <TableCell>Who</TableCell>}
             <TableCell>Event</TableCell>
             <TableCell>Scenario / list</TableCell>
             <TableCell>Camera</TableCell>
+            {shows.zone && <TableCell>Zone</TableCell>}
+            {shows.line && <TableCell>Line</TableCell>}
             <TableCell>Seen</TableCell>
             <TableCell>Actions</TableCell>
           </TableRow>
@@ -455,12 +481,14 @@ const EventArchiveRenderer = () => {
         <TableBody>
           {pageRows.map(row => (
             <TableRow key={`${row.source}:${row.id}`} sx={{ opacity: row.seen ? 0.6 : 1 }}>
-              <TableCell sx={{ width: 58 }}>
-                {row.face && (
-                  <img src={`data:image/jpeg;base64,${row.face}`} alt=""
-                    style={{ width: 50, height: 50, objectFit: 'cover', borderRadius: 4 }} />
-                )}
-              </TableCell>
+              {shows.face && (
+                <TableCell sx={{ width: 58 }}>
+                  {row.face && (
+                    <img src={`data:image/jpeg;base64,${row.face}`} alt=""
+                      style={{ width: 50, height: 50, objectFit: 'cover', borderRadius: 4 }} />
+                  )}
+                </TableCell>
+              )}
               <TableCell sx={{ whiteSpace: 'nowrap' }}>{row.at.toLocaleString()}</TableCell>
               <TableCell>
                 <Chip size="small" variant="outlined"
@@ -469,9 +497,13 @@ const EventArchiveRenderer = () => {
               <TableCell>
                 <Chip size="small" color={SEVERITY_COLOR[row.severity] ?? 'default'} label={row.severity} />
               </TableCell>
+              {shows.condition && <TableCell sx={{ whiteSpace: 'nowrap' }}>{row.condition ?? '—'}</TableCell>}
+              {shows.identity && <TableCell sx={{ whiteSpace: 'nowrap' }}>{row.identity ?? '—'}</TableCell>}
               <TableCell>{row.what}</TableCell>
               <TableCell>{row.detail}</TableCell>
               <TableCell>{camName(row.camId)}</TableCell>
+              {shows.zone && <TableCell>{row.zone ?? '—'}</TableCell>}
+              {shows.line && <TableCell>{row.line ?? '—'}</TableCell>}
               <TableCell sx={{ whiteSpace: 'nowrap' }}>
                 {row.seen ? <CheckBoxIcon fontSize="small" /> : <CheckBoxOutlineBlankIcon fontSize="small" />}
                 {row.seenBy && (
@@ -503,7 +535,7 @@ const EventArchiveRenderer = () => {
             </TableRow>
           ))}
           {!pageRows.length && (
-            <TableRow><TableCell colSpan={9}>
+            <TableRow><TableCell colSpan={columnCount}>
               <Typography variant="body2" color="text.secondary" sx={{ p: 2 }}>
                 No events match the current filters.
               </Typography>
