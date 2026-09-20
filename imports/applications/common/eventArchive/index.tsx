@@ -10,13 +10,20 @@
 // normalises them into one row type, sorts by time and renders one table.
 // Marking a row seen still calls that source's own method.
 //
-// What that costs, and why it is acceptable for now:
-//   - Paging is per source. "Older" asks each publication for its next page,
-//     so a page here is "the next N of each", not a strict global page. With
-//     both sorted by time the merged list is still in the right order.
-//   - Person and list filters stay client-side, exactly as on the old alerts
-//     screen: the alertsArchive publication accepts a filter on source, seen,
-//     seenBy, label and timestamp only, and silently drops the rest.
+// Paging works on the merged list, not on either source: both subscriptions
+// ask for the newest `window` documents and the screen slices a page out of
+// what comes back. Asking each publication for its own page instead looks
+// right and is not: the two subscriptions overlap in one client-side
+// collection, the notification panel publishes into the same collection, and
+// nothing then tells page two from page one.
+//
+// The cost is that the window grows with the page, and the publications clamp
+// it at WINDOW_MAX. Past that the screen says so rather than quietly showing
+// less than it claims.
+//
+// Person and list filters stay client-side, exactly as on the old alerts
+// screen: the alertsArchive publication accepts a filter on source, seen,
+// seenBy, label and timestamp only, and silently drops the rest.
 import { AppType } from '../..';
 import React from 'react';
 import { Meteor } from 'meteor/meteor';
@@ -45,6 +52,8 @@ import { ScenariosV2Collection, ScenarioEventsV2Collection } from '/imports/api/
 import AlertItemModal from '/imports/applications/personAlert/alertsArchive/itemModal';
 
 const PAGE = 50;
+// What the publications allow in one subscription (server/main.ts PAGE.max).
+const WINDOW_MAX = 500;
 
 type Source = 'all' | 'watchlist' | 'scenario';
 
@@ -163,11 +172,15 @@ const EventArchiveRenderer = () => {
     return f;
   }, [cams, unseenOnly, range, scenarioIds, severities, message]);
 
-  // Subscribing with an empty filter to a source the tabs have turned off
-  // would still pull its documents down, so each subscription is skipped by
-  // asking for nothing when its source is not wanted.
-  useSubscribe('alertsArchive', alertFilter, wantsWatchlist ? PAGE : 0, page * PAGE, { timestamp: -1 });
-  useSubscribe('scenario_events_v2', scenarioFilter, wantsScenario ? PAGE : 0, page * PAGE, { triggeredAt: -1 });
+  // Everything down to the current page, in one subscription per source.
+  // A source that is not on screen is not subscribed at all: passing a limit
+  // of zero does not do that — clampLimit reads zero as "unset" and hands
+  // back the default page — but an undefined name skips the hook's work.
+  const windowSize = Math.min((page + 1) * PAGE, WINDOW_MAX);
+  useSubscribe(wantsWatchlist ? 'alertsArchive' : undefined,
+    alertFilter, windowSize, 0, { timestamp: -1 });
+  useSubscribe(wantsScenario ? 'scenario_events_v2' : undefined,
+    scenarioFilter, windowSize, 0, { triggeredAt: -1 });
   useSubscribe('cams');
   useSubscribe('alertLists');
   useSubscribe('visitSummaryMeta');
@@ -181,11 +194,11 @@ const EventArchiveRenderer = () => {
   const scenarios = useFind(() => ScenariosV2Collection.find({}));
 
   const alerts = useFind(() => AlertsArchiveCollection.find(alertFilter, {
-    sort: { timestamp: -1 }, limit: PAGE,
-  }), [alertFilter, page]);
+    sort: { timestamp: -1 }, limit: windowSize,
+  }), [alertFilter, windowSize]);
   const events = useFind(() => ScenarioEventsV2Collection.find(scenarioFilter, {
-    sort: { triggeredAt: -1 }, limit: PAGE,
-  }), [scenarioFilter, page]);
+    sort: { triggeredAt: -1 }, limit: windowSize,
+  }), [scenarioFilter, windowSize]);
 
   const scenarioOf = React.useMemo(
     () => new Map(scenarios.map(s => [s._id as string, s])), [scenarios]);
@@ -259,6 +272,10 @@ const EventArchiveRenderer = () => {
     return out.sort((x, y) => y.at.getTime() - x.at.getTime());
   }, [alerts, events, wantsWatchlist, wantsScenario, lists, persons, conditions, identities,
       alertLists, people, camList, scenarioOf]);
+
+  const pageRows = rows.slice(page * PAGE, (page + 1) * PAGE);
+  const windowFull = windowSize >= WINDOW_MAX;
+  const canGoOlder = !windowFull && rows.length >= (page + 1) * PAGE;
 
   const markSeen = (row: Row) => {
     if (row.source === 'watchlist') Meteor.callAsync('setSeenAlert', row.id);
@@ -383,7 +400,8 @@ const EventArchiveRenderer = () => {
         // Say it rather than let the operator wonder: these two match against
         // the scenario, which is only known for the events already fetched.
         <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary' }}>
-          Condition and Who narrow the {PAGE} events on this page — step back with Older to search further.
+          Condition and Who are matched against the scenario, so they narrow the {windowSize} most
+          recent events rather than the whole archive.
         </Typography>
       )}
       <Box sx={{ mb: 1 }} />
@@ -404,7 +422,7 @@ const EventArchiveRenderer = () => {
           </TableRow>
         </TableHead>
         <TableBody>
-          {rows.map(row => (
+          {pageRows.map(row => (
             <TableRow key={`${row.source}:${row.id}`} sx={{ opacity: row.seen ? 0.6 : 1 }}>
               <TableCell sx={{ width: 58 }}>
                 {row.face && (
@@ -453,7 +471,7 @@ const EventArchiveRenderer = () => {
               </TableCell>
             </TableRow>
           ))}
-          {!rows.length && (
+          {!pageRows.length && (
             <TableRow><TableCell colSpan={9}>
               <Typography variant="body2" color="text.secondary" sx={{ p: 2 }}>
                 No events match the current filters.
@@ -468,12 +486,14 @@ const EventArchiveRenderer = () => {
           <Button startIcon={<NavigateBeforeIcon />} disabled={page === 0}
             onClick={() => setPage(p => Math.max(0, p - 1))}>Newer</Button>
           <Button disabled>page {page + 1}</Button>
-          <Button endIcon={<NavigateNextIcon />}
-            disabled={alerts.length < PAGE && events.length < PAGE}
+          <Button endIcon={<NavigateNextIcon />} disabled={!canGoOlder}
             onClick={() => setPage(p => p + 1)}>Older</Button>
         </ButtonGroup>
         <Box sx={{ color: 'text.secondary', fontSize: 12 }}>
-          {rows.length} shown
+          {pageRows.length
+            ? `${page * PAGE + 1}–${page * PAGE + pageRows.length} of ${rows.length} loaded`
+            : 'nothing on this page'}
+          {windowFull && ' · the archive hands out the newest 500; narrow the filters to go further back'}
         </Box>
       </Stack>
     </Paper>
