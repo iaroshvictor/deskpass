@@ -183,5 +183,9 @@ const IntruderAlertsArchive: AppType = {
     appIcon: <Icon />,
     render: IntruderAlertsArchiveRenderer,
     module: 'accessControl',
+    // Superseded by Event Archive, which shows line crossings alongside
+    // person-list alerts and scenario firings. Kept whole and reachable in
+    // code: drop this flag to put the shortcut back.
+    hideShortcut: true,
 };
 export default IntruderAlertsArchive;

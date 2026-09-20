@@ -93,7 +93,7 @@ export const SCREENS = [
     file: 'imports/applications/common/eventArchive/index.tsx',
     title: 'Event archive',
     kind: 'action',
-    submits: ['markScenarioEventsV2Seen', 'setAllAlertsSeen', 'setSeenAlert'],
+    submits: ['markScenarioEventsV2Seen', 'setAllAlertsSeen', 'setSeenAlert', 'setSeenIntruder'],
   },
   {
     file: 'imports/applications/common/enrollPerson/index.tsx',

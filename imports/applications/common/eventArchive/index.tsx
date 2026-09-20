@@ -1,9 +1,10 @@
 // One archive for everything that raised an alarm.
 //
-// Until now the same question — "what happened, and has anyone looked at it?"
-// — was answered by two screens reading two collections: person-list face
-// matches (alertsArchive) and scenario engine firings (scenario_events_v2).
-// This screen puts them in one list.
+// The same question — "what happened, and has anyone looked at it?" — used to
+// be answered by three screens reading three collections: person-list face
+// matches (alertsArchive), scenario engine firings (scenario_events_v2) and
+// line crossings at a gate (intruderalerts). This screen puts them in one
+// list.
 //
 // It is a CLIENT-side merge on purpose: no collection, publication or method
 // changes. Both sources keep their own shape in the database; this file
@@ -50,14 +51,16 @@ import { VisitSummaryMetaCollection } from '/imports/api/visitSummary';
 import { UsersMetaCollection } from '/imports/api/operatorsMeta';
 import { ScenariosV2Collection, ScenarioEventsV2Collection } from '/imports/api/scenarioModel';
 import { CamZoneDefsCollection } from '/imports/api/camZoneDefs';
+import { IntruderAlertsCollection } from '/imports/api/intruderAlerts';
 import { CamLineDefsCollection } from '/imports/api/camLineDefs';
 import AlertItemModal from '/imports/applications/personAlert/alertsArchive/itemModal';
+import IntruderItemModal from '/imports/applications/accessControl/intruderAlerts/intruderItemModal';
 
 const PAGE = 50;
 // What the publications allow in one subscription (server/main.ts PAGE.max).
 const WINDOW_MAX = 500;
 
-type Source = 'all' | 'personList' | 'scenario';
+type Source = 'all' | 'personList' | 'scenario' | 'intruder';
 
 const SEVERITY_COLOR: Record<string, 'info' | 'warning' | 'error'> = {
   info: 'info', warning: 'warning', critical: 'error',
@@ -87,7 +90,7 @@ const IDENTITY_LABEL: Record<string, string> = {
 /** One row of the merged list, whichever collection it came from. */
 type Row = {
   id: string;
-  source: 'personList' | 'scenario';
+  source: 'personList' | 'scenario' | 'intruder';
   at: Date;
   severity: string;
   camId: string;
@@ -110,7 +113,7 @@ const EventArchiveRenderer = () => {
   const [source, setSource] = React.useState<Source>('all');
   const [page, setPage] = React.useState(0);
   const [search, setSearch] = React.useState('');
-  const [detailsOf, setDetailsOf] = React.useState<string | null>(null);
+  const [detailsOf, setDetailsOf] = React.useState<{ id: string; source: Row['source'] } | null>(null);
 
   // Filters shared by both sources, kept in the shape each publication wants.
   const [cams, setCams] = React.useState<string[]>([]);
@@ -149,24 +152,41 @@ const EventArchiveRenderer = () => {
   // person — is a statement about what the operator is looking for, so the
   // other source steps aside. Without this, picking one scenario still left
   // every person-list alert in the list and the filter looked broken.
-  const scenarioNarrowed = scenarioIds.length > 0 || severities.length > 0 || message !== ''
+  const scenarioNarrowed = scenarioIds.length > 0 || severities.length > 0
     || conditions.length > 0 || identities.length > 0 || zones.length > 0 || lines.length > 0;
   const personListNarrowed = lists.length > 0 || persons.length > 0;
+  // With three sources the rule is the same one stated for two: narrowing by
+  // something only one source has speaks for the screen, and the sources that
+  // cannot answer it step aside. Intruder crossings have no filter of their
+  // own, so they show whenever nothing source-specific is asked for.
+  const narrowedToNothingInParticular = !personListNarrowed && !scenarioNarrowed;
   const wantsPersonList = source === 'personList'
-    || (source === 'all' && (!scenarioNarrowed || personListNarrowed));
+    || (source === 'all' && (narrowedToNothingInParticular || personListNarrowed));
   const wantsScenario = source === 'scenario'
-    || (source === 'all' && (!personListNarrowed || scenarioNarrowed));
+    || (source === 'all' && (narrowedToNothingInParticular || scenarioNarrowed));
+  const wantsIntruder = source === 'intruder'
+    || (source === 'all' && narrowedToNothingInParticular);
   // Which controls are on screen is the tab's business alone. Tying it to the
   // filters too would hide the scenario controls the moment a person filter
   // was set, and there would be no way to narrow both at once.
-  const showPersonListFilters = source !== 'scenario';
-  const showScenarioFilters = source !== 'personList';
+  const showPersonListFilters = source === 'all' || source === 'personList';
+  const showScenarioFilters = source === 'all' || source === 'scenario';
   const hiddenBySource = source !== 'all' ? null
-    : !wantsPersonList ? 'Person-list alerts are hidden while a scenario filter is set.'
-    : !wantsScenario ? 'Scenario events are hidden while a person or list filter is set.'
+    : !wantsPersonList ? 'Person-list alerts and intruder crossings are hidden while a scenario filter is set.'
+    : !wantsScenario ? 'Scenario events and intruder crossings are hidden while a person or list filter is set.'
     : null;
 
   const alertFilter = React.useMemo(() => {
+    const f: { [k: string]: any } = {};
+    if (cams.length) f.source = { $in: cams };
+    if (unseenOnly) f.seen = false;
+    if (range) f.timestamp = { $gte: range[0], $lte: range[1] };
+    return f;
+  }, [cams, unseenOnly, range]);
+
+  // Intruder crossings accept what the publication whitelists: camera, seen
+  // and a time range — the three both other sources already understand.
+  const intruderFilter = React.useMemo(() => {
     const f: { [k: string]: any } = {};
     if (cams.length) f.source = { $in: cams };
     if (unseenOnly) f.seen = false;
@@ -196,6 +216,8 @@ const EventArchiveRenderer = () => {
     alertFilter, windowSize, 0, { timestamp: -1 });
   useSubscribe(wantsScenario ? 'scenario_events_v2' : undefined,
     scenarioFilter, windowSize, 0, { triggeredAt: -1 });
+  useSubscribe(wantsIntruder ? 'intruderAlerts' : undefined,
+    intruderFilter, windowSize, 0, { timestamp: -1 });
   useSubscribe('cams');
   useSubscribe('alertLists');
   useSubscribe('visitSummaryMeta');
@@ -218,6 +240,9 @@ const EventArchiveRenderer = () => {
   const events = useFind(() => ScenarioEventsV2Collection.find(scenarioFilter, {
     sort: { triggeredAt: -1 }, limit: windowSize,
   }), [scenarioFilter, windowSize]);
+  const intruders = useFind(() => IntruderAlertsCollection.find(intruderFilter, {
+    sort: { timestamp: -1 }, limit: windowSize,
+  }), [intruderFilter, windowSize]);
 
   const scenarioOf = React.useMemo(
     () => new Map(scenarios.map(s => [s._id as string, s])), [scenarios]);
@@ -294,9 +319,40 @@ const EventArchiveRenderer = () => {
       }
     }
 
-    return out.sort((x, y) => y.at.getTime() - x.at.getTime());
-  }, [alerts, events, wantsPersonList, wantsScenario, lists, persons, conditions, identities,
-      alertLists, people, camList, scenarioOf, zoneDefs, lineDefs]);
+    if (wantsIntruder) {
+      for (const i of intruders) {
+        const cam = camList.find(c => c._id === i.source);
+        const lineLabel = i.triggerLine
+          ? (cam?.lines?.find(l => l.lineId === i.triggerLine)?.label ?? i.triggerLine)
+          : undefined;
+        out.push({
+          id: i._id as string,
+          source: 'intruder',
+          at: i.timestamp,
+          // A crossing at a gate is the most serious of the three: someone
+          // went through a door they were not cleared for.
+          severity: 'critical',
+          camId: i.source,
+          what: lineLabel
+            ? `Intruder crossed «${lineLabel}» → ${i.triggerSide ?? '?'}`
+            : 'Intruder detected',
+          detail: '—',
+          line: lineLabel,
+          seen: !!i.seen,
+          seenBy: i.seenBy ?? undefined,
+          seenAt: i.seenAt,
+          face: i.face_b64,
+        });
+      }
+    }
+
+    const text = message.toLowerCase();
+    return out
+      .filter((r) => !text || r.what.toLowerCase().includes(text))
+      .sort((x, y) => y.at.getTime() - x.at.getTime());
+  }, [alerts, events, intruders, wantsPersonList, wantsScenario, wantsIntruder,
+      lists, persons, conditions, identities,
+      alertLists, people, camList, scenarioOf, zoneDefs, lineDefs, message]);
 
   const pageRows = rows.slice(page * PAGE, (page + 1) * PAGE);
   // Thirteen columns of mostly dashes helps nobody, so a column appears only
@@ -318,12 +374,16 @@ const EventArchiveRenderer = () => {
 
   const markSeen = (row: Row) => {
     if (row.source === 'personList') Meteor.callAsync('setSeenAlert', row.id);
+    else if (row.source === 'intruder') Meteor.callAsync('setSeenIntruder', row.id);
     else Meteor.callAsync('markScenarioEventsV2Seen', [row.id]);
   };
 
   const markAllSeen = () => {
     if (wantsPersonList) Meteor.callAsync('setAllAlertsSeen');
     if (wantsScenario) Meteor.callAsync('markScenarioEventsV2Seen');
+    // Intruder crossings are acknowledged one at a time: the server has no
+    // method that marks them all, and inventing one here would be a server
+    // change this screen set out not to make.
   };
 
   const byId = <T extends { _id?: string }>(all: T[], ids: string[]) =>
@@ -331,12 +391,18 @@ const EventArchiveRenderer = () => {
 
   return (
     <Paper sx={{ minHeight: '100%', p: 2, boxSizing: 'border-box', minWidth: 720 }}>
-      {detailsOf && <AlertItemModal alertId={detailsOf} onCloseModal={() => setDetailsOf(null)} />}
+      {detailsOf?.source === 'personList' && (
+        <AlertItemModal alertId={detailsOf.id} onCloseModal={() => setDetailsOf(null)} />
+      )}
+      {detailsOf?.source === 'intruder' && (
+        <IntruderItemModal alertId={detailsOf.id} onCloseModal={() => setDetailsOf(null)} />
+      )}
 
       <Tabs value={source} onChange={(_e, v: Source) => { setSource(v); setPage(0); }} sx={{ mb: 2 }}>
         <Tab value="all" label="All events" />
         <Tab value="personList" label="Person lists" />
         <Tab value="scenario" label="Scenarios" />
+        <Tab value="intruder" label="Intruders" />
       </Tabs>
 
       {/* ── filters both sources understand ── */}
@@ -359,6 +425,8 @@ const EventArchiveRenderer = () => {
           value={range}
           onChange={(value) => reset(setRange)(value as [Date, Date] | null)}
         />
+        <TextField label="Search event" size="small" value={search}
+          onChange={e => setSearch(e.target.value)} sx={{ minWidth: 200 }} />
         <FormControlLabel
           sx={{ whiteSpace: 'nowrap' }}
           control={<Switch size="small" checked={unseenOnly}
@@ -439,8 +507,6 @@ const EventArchiveRenderer = () => {
               <ToggleButton value="warning">warning</ToggleButton>
               <ToggleButton value="critical">critical</ToggleButton>
             </ToggleButtonGroup>
-            <TextField label="Search message" size="small" value={search}
-              onChange={e => setSearch(e.target.value)} sx={{ minWidth: 200 }} />
           </>
         )}
         <Button startIcon={<DoneAllIcon />} size="small" onClick={markAllSeen}>
@@ -496,7 +562,8 @@ const EventArchiveRenderer = () => {
               <TableCell sx={{ whiteSpace: 'nowrap' }}>{row.at.toLocaleString()}</TableCell>
               <TableCell>
                 <Chip size="small" variant="outlined"
-                  label={row.source === 'personList' ? 'person list' : 'scenario'} />
+                  label={row.source === 'personList' ? 'person list'
+                    : row.source === 'intruder' ? 'intruder' : 'scenario'} />
               </TableCell>
               <TableCell>
                 <Chip size="small" color={SEVERITY_COLOR[row.severity] ?? 'default'} label={row.severity} />
@@ -529,8 +596,9 @@ const EventArchiveRenderer = () => {
                       Mark seen
                     </Button>
                   )}
-                  {row.source === 'personList' && (
-                    <Button onClick={() => setDetailsOf(row.id)} startIcon={<PageviewIcon />}>
+                  {row.source !== 'scenario' && (
+                    <Button onClick={() => setDetailsOf({ id: row.id, source: row.source })}
+                      startIcon={<PageviewIcon />}>
                       Details
                     </Button>
                   )}
