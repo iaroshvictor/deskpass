@@ -436,6 +436,26 @@ const EventArchiveRenderer = () => {
   const byId = <T extends { _id?: string }>(all: T[], ids: string[]) =>
     all.filter(x => ids.includes(x._id as string));
 
+  // Rendered above and below the table: a long page should not have to be
+  // scrolled back up to turn.
+  const pagination = (
+    <Stack direction="row" justifyContent="center" alignItems="center" sx={{ my: 1 }} spacing={2}>
+      <ButtonGroup size="small">
+        <Button startIcon={<NavigateBeforeIcon />} disabled={page === 0}
+          onClick={() => setPage(p => Math.max(0, p - 1))}>Newer</Button>
+        <Button disabled>page {page + 1}</Button>
+        <Button endIcon={<NavigateNextIcon />} disabled={!canGoOlder}
+          onClick={() => setPage(p => p + 1)}>Older</Button>
+      </ButtonGroup>
+      <Box sx={{ color: 'text.secondary', fontSize: 12 }}>
+        {pageRows.length
+          ? `${page * PAGE + 1}–${page * PAGE + pageRows.length} of ${rows.length} loaded`
+          : 'nothing on this page'}
+        {windowFull && ' · the archive hands out the newest 500; narrow the filters to go further back'}
+      </Box>
+    </Stack>
+  );
+
   return (
     <Paper sx={{ minHeight: '100%', p: 2, boxSizing: 'border-box', minWidth: 720 }}>
       {detailsOf?.source === 'personList' && (
@@ -587,6 +607,7 @@ const EventArchiveRenderer = () => {
       <Box sx={{ mb: 1 }} />
 
       {/* ── one list ── */}
+      {pagination}
       <Box sx={{ position: 'relative' }}>
       <Table size="small">
         <TableHead>
@@ -684,21 +705,7 @@ const EventArchiveRenderer = () => {
       )}
       </Box>
 
-      <Stack direction="row" justifyContent="center" alignItems="center" sx={{ mt: 1 }} spacing={2}>
-        <ButtonGroup size="small">
-          <Button startIcon={<NavigateBeforeIcon />} disabled={page === 0}
-            onClick={() => setPage(p => Math.max(0, p - 1))}>Newer</Button>
-          <Button disabled>page {page + 1}</Button>
-          <Button endIcon={<NavigateNextIcon />} disabled={!canGoOlder}
-            onClick={() => setPage(p => p + 1)}>Older</Button>
-        </ButtonGroup>
-        <Box sx={{ color: 'text.secondary', fontSize: 12 }}>
-          {pageRows.length
-            ? `${page * PAGE + 1}–${page * PAGE + pageRows.length} of ${rows.length} loaded`
-            : 'nothing on this page'}
-          {windowFull && ' · the archive hands out the newest 500; narrow the filters to go further back'}
-        </Box>
-      </Stack>
+      {pagination}
     </Paper>
   );
 };
